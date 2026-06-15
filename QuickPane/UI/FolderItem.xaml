@@ -1,0 +1,15 @@
+<UserControl x:Class="QuickPane.UI.FolderItem"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Focusable="False">
+    <Border x:Name="Root" Background="Transparent" CornerRadius="3" Padding="8,4"
+            Cursor="Hand" SnapsToDevicePixels="True">
+        <StackPanel Orientation="Horizontal">
+            <Image x:Name="Icon" Width="16" Height="16" Stretch="Uniform"
+                   SnapsToDevicePixels="True" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBlock x:Name="Label" VerticalAlignment="Center" FontSize="12"
+                       TextTrimming="CharacterEllipsis"
+                       Foreground="{DynamicResource TextPrimary}" />
+        </StackPanel>
+    </Border>
+</UserControl>

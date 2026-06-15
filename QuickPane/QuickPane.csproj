@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">x64</Platform>
+    <ProjectGuid>{3D9A2B1C-0F4E-4A77-9C2E-7B6D5E4F3A21}</ProjectGuid>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>QuickPane</RootNamespace>
+    <AssemblyName>QuickPane</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <ProjectTypeGuids>{60dc8134-eba5-43b8-bcc9-bb4bc16c2548};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
+    <WarningLevel>4</WarningLevel>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <Deterministic>true</Deterministic>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>quickpane.ico</ApplicationIcon>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
+    <PlatformTarget>x64</PlatformTarget>
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\x64\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <Prefer32Bit>false</Prefer32Bit>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
+    <PlatformTarget>x64</PlatformTarget>
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\x64\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <Prefer32Bit>false</Prefer32Bit>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Xml" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Runtime.Serialization" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="System.Xaml">
+      <RequiredTargetFramework>4.0</RequiredTargetFramework>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <ApplicationDefinition Include="App.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </ApplicationDefinition>
+    <Compile Include="App.xaml.cs">
+      <DependentUpon>App.xaml</DependentUpon>
+      <SubType>Code</SubType>
+    </Compile>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Interop\NativeMethods.cs" />
+    <Compile Include="Interop\WinEventHook.cs" />
+    <Compile Include="Interop\ExplorerNavigator.cs" />
+    <Compile Include="Interop\DialogNavigator.cs" />
+    <Compile Include="Explorer\ExplorerWatcher.cs" />
+    <Compile Include="Explorer\ExplorerWindow.cs" />
+    <Compile Include="Explorer\ExplorerFollowerWatcher.cs" />
+    <Compile Include="Explorer\AppBarHost.cs" />
+    <Compile Include="Explorer\RecentTracker.cs" />
+    <Compile Include="Explorer\DialogPaneWatcher.cs" />
+    <Compile Include="Explorer\DialogInsidePane.cs" />
+    <Compile Include="Interop\VirtualDesktop.cs" />
+    <Compile Include="Models\Models.cs" />
+    <Compile Include="Services\Log.cs" />
+    <Compile Include="Services\SettingsStore.cs" />
+    <Compile Include="Services\GroupStore.cs" />
+    <Compile Include="Services\RecentFoldersService.cs" />
+    <Compile Include="Services\DriveService.cs" />
+    <Compile Include="Services\ThemeService.cs" />
+    <Compile Include="Services\ShellLink.cs" />
+    <Compile Include="Services\FileDropOps.cs" />
+    <Compile Include="Services\UiState.cs" />
+    <Compile Include="UI\TextPrompt.cs" />
+    <Compile Include="UI\FolderTreeNode.cs" />
+    <Compile Include="UI\ShellRootSection.cs" />
+    <Compile Include="UI\DropLineAdorner.cs" />
+    <Compile Include="UI\DragGhostAdorner.cs" />
+    <Compile Include="Services\KnownFolders.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Page Include="Themes\Controls.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Themes\Theme.Dark.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Themes\Theme.Light.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="UI\SidebarControl.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Compile Include="UI\SidebarControl.xaml.cs">
+      <DependentUpon>SidebarControl.xaml</DependentUpon>
+    </Compile>
+    <Page Include="UI\GroupSection.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Compile Include="UI\GroupSection.xaml.cs">
+      <DependentUpon>GroupSection.xaml</DependentUpon>
+    </Compile>
+    <Page Include="UI\FolderItem.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Compile Include="UI\FolderItem.xaml.cs">
+      <DependentUpon>FolderItem.xaml</DependentUpon>
+    </Compile>
+    <Page Include="UI\RecentsSection.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Compile Include="UI\RecentsSection.xaml.cs">
+      <DependentUpon>RecentsSection.xaml</DependentUpon>
+    </Compile>
+    <Page Include="UI\ComputerSection.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Compile Include="UI\ComputerSection.xaml.cs">
+      <DependentUpon>ComputerSection.xaml</DependentUpon>
+    </Compile>
+    <Page Include="UI\SettingsPanel.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Compile Include="UI\SettingsPanel.xaml.cs">
+      <DependentUpon>SettingsPanel.xaml</DependentUpon>
+    </Compile>
+    <Page Include="UI\GroupPickerWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Compile Include="UI\GroupPickerWindow.xaml.cs">
+      <DependentUpon>GroupPickerWindow.xaml</DependentUpon>
+    </Compile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="app.manifest" />
+    <Resource Include="quickpane.ico" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

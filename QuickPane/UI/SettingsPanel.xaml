@@ -1,0 +1,10 @@
+<UserControl x:Class="QuickPane.UI.SettingsPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Focusable="True">
+    <Border Background="{DynamicResource SidebarBackground}">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
+            <StackPanel x:Name="Host" />
+        </ScrollViewer>
+    </Border>
+</UserControl>

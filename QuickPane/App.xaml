@@ -1,0 +1,10 @@
+<Application x:Class="QuickPane.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnExplicitShutdown">
+    <Application.Resources>
+        <!-- The active theme dictionary is injected at runtime by ThemeService.
+             It is added/removed from Application.Current.Resources.MergedDictionaries
+             so every control that uses DynamicResource updates with no restart. -->
+    </Application.Resources>
+</Application>

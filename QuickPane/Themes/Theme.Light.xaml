@@ -1,0 +1,23 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Light theme. AccentBrush, ItemHoverBackground and ItemActiveBackground are replaced
+         at runtime by ThemeService using the live Windows accent color. -->
+
+    <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="/QuickPane;component/Themes/Controls.xaml" />
+    </ResourceDictionary.MergedDictionaries>
+
+    <SolidColorBrush x:Key="SidebarBackground" Color="#E6F3F3F3" />
+    <SolidColorBrush x:Key="TextPrimary"       Color="#FF1A1A1A" />
+    <SolidColorBrush x:Key="TextSecondary"     Color="#FF6A6A6A" />
+    <SolidColorBrush x:Key="SeparatorColor"    Color="#FFD0D0D0" />
+    <SolidColorBrush x:Key="ChevronColor"      Color="#FF707070" />
+    <SolidColorBrush x:Key="DriveBarTrack"     Color="#FFDDDDDD" />
+    <SolidColorBrush x:Key="BrokenLinkColor"   Color="#FFB03030" />
+
+    <SolidColorBrush x:Key="AccentBrush"          Color="#FF0078D4" />
+    <SolidColorBrush x:Key="ItemHoverBackground"  Color="#260078D4" />
+    <SolidColorBrush x:Key="ItemActiveBackground" Color="#330078D4" />
+
+</ResourceDictionary>
