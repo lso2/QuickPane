@@ -232,12 +232,27 @@ namespace QuickPane.Explorer
             if (_pending.Count == 0) _retryTimer.Stop();
         }
 
-        /// <summary>Re-sweep open Explorer windows. Reapplies layout to tracked ones and attaches new ones.</summary>
+        /// <summary>Re-sweep open Explorer windows. Reapplies layout to tracked ones, attaches new
+        /// ones, and prunes windows whose DESTROY event was missed, so a lost event can no longer
+        /// leak an ExplorerWindow (HwndSource + settings-event subscriptions) for the session.</summary>
         public void Rescan()
         {
+            List<IntPtr> dead = null;
             foreach (var kv in _windows)
             {
                 if (NM.IsWindow(kv.Key)) kv.Value.ApplyLayout();
+                else (dead ?? (dead = new List<IntPtr>())).Add(kv.Key);
+            }
+            if (dead != null)
+            {
+                foreach (var hwnd in dead)
+                {
+                    var win = _windows[hwnd];
+                    _windows.Remove(hwnd);
+                    TrackAttached(win, false);
+                    try { win.Dispose(); } catch (Exception ex) { Log.Error("prune dispose", ex); }
+                    Log.Info("Explorer window pruned (missed destroy) " + hwnd.ToString("X"));
+                }
             }
 
             NM.EnumWindows((hwnd, l) =>

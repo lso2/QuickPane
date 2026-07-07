@@ -8,9 +8,13 @@ using QuickPane.Models;
 namespace QuickPane.Services
 {
     /// <summary>
-    /// Surfaces recently used folders from %APPDATA%\Microsoft\Windows\Recent. Only .lnk files whose
-    /// target is a directory are kept, newest first, capped at settings.RecentsMaxCount. A
-    /// FileSystemWatcher keeps the list live with no polling.
+    /// Surfaces recently used items from %APPDATA%\Microsoft\Windows\Recent plus folders navigated
+    /// through QuickPane. All scanning (shortcut resolution, existence checks) runs on the background
+    /// worker: the Recent folder routinely holds hundreds of .lnk files, some pointing at dead
+    /// network targets, and resolving those on the UI thread stalled the input queue shared with
+    /// Explorer. Shortcuts are resolved newest-first and resolution stops once the list is full, so
+    /// the cost is bounded by the visible count rather than the folder size. RecentsChanged is always
+    /// raised on the UI thread.
     /// </summary>
     public sealed class RecentFoldersService : IDisposable
     {
@@ -26,6 +30,7 @@ namespace QuickPane.Services
         private FileSystemWatcher _watcher;
         private Timer _debounce;
         private readonly object _gate = new object();
+        private int _rescanQueued; // coalesces queued background rescans
 
         public RecentFoldersService(SettingsStore settings)
         {
@@ -35,13 +40,19 @@ namespace QuickPane.Services
             _appRecentFile = Path.Combine(appData, @"QuickPane\recent.txt");
         }
 
-        /// <summary>Record a folder the user just opened through QuickPane, so Recent is reliable even
-        /// when the Windows Recent folder is sparse. Newest first, deduped, persisted.</summary>
+        /// <summary>Record a folder the user just opened through QuickPane. Safe to call from any
+        /// thread; the existence check and file write happen on the worker.</summary>
         public void RecordNavigation(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            WorkQueue.Post(() => RecordCore(path));
+        }
+
+        private void RecordCore(string path)
         {
             try
             {
-                if (string.IsNullOrEmpty(path) || !Directory.Exists(path)) return;
+                if (!Directory.Exists(path)) return;
                 bool changed;
                 lock (_gate)
                 {
@@ -58,7 +69,7 @@ namespace QuickPane.Services
                         changed = true;
                     }
                 }
-                if (changed) { Rescan(); RecentsChanged?.Invoke(); }
+                if (changed) RescanCore();
             }
             catch (Exception ex) { Log.Error("record navigation", ex); }
         }
@@ -90,8 +101,11 @@ namespace QuickPane.Services
 
         public void Start()
         {
-            LoadAppRecent();
-            Rescan();
+            WorkQueue.Post(() =>
+            {
+                LoadAppRecent();
+                RescanCore();
+            });
             try
             {
                 if (!Directory.Exists(_recentDir)) return;
@@ -111,69 +125,82 @@ namespace QuickPane.Services
             }
         }
 
+        /// <summary>Queue a rescan on the worker. Multiple queued requests coalesce into one.</summary>
         public void Rescan()
+        {
+            if (Interlocked.Exchange(ref _rescanQueued, 1) == 1) return;
+            WorkQueue.Post(() =>
+            {
+                Interlocked.Exchange(ref _rescanQueued, 0);
+                RescanCore();
+            });
+        }
+
+        // Runs on the worker only.
+        private void RescanCore()
         {
             var result = new List<PinnedFolder>();
             try
             {
+                int cap = _settings.Current.RecentsMaxCount;
+
+                List<string> appSnapshot;
+                lock (_gate) appSnapshot = _appRecent.ToList();
+                var appItems = new List<PinnedFolder>();
+                foreach (var p in appSnapshot)
+                {
+                    if (!SafeDirExists(p)) continue;
+                    appItems.Add(new PinnedFolder { DisplayName = Leaf(p), TargetPath = p, LinkPath = null, Exists = true, IsFile = false });
+                    if (appItems.Count >= cap) break;
+                }
+
+                var recentItems = new List<PinnedFolder>();
                 if (Directory.Exists(_recentDir))
                 {
-                    int cap = _settings.Current.RecentsMaxCount;
-                    var candidates = new List<Tuple<DateTime, PinnedFolder>>();
-
+                    // Newest first by link write time (cheap metadata), then resolve only until the
+                    // list is full. This keeps a 500-link Recent folder from costing 500 COM loads.
+                    var byTime = new List<Tuple<DateTime, string>>();
                     foreach (var lnk in Directory.GetFiles(_recentDir, "*.lnk"))
                     {
+                        DateTime when;
+                        try { when = File.GetLastWriteTimeUtc(lnk); }
+                        catch { when = DateTime.MinValue; }
+                        byTime.Add(Tuple.Create(when, lnk));
+                    }
+                    byTime.Sort((a, b) => b.Item1.CompareTo(a.Item1));
+
+                    int budget = Math.Max(cap * 3, 60); // resolution attempts, not results
+                    foreach (var entry in byTime)
+                    {
+                        if (recentItems.Count >= cap || budget-- <= 0) break;
+
                         string target;
-                        try { target = ShellLink.ResolveTarget(lnk); }
+                        try { target = ShellLink.ResolveTarget(entry.Item2); }
                         catch { continue; }
                         if (string.IsNullOrEmpty(target)) continue;
 
-                        // Show the actual recent items, files and folders alike, just like the native
-                        // Recent list. A file keeps its own path and is flagged so the UI can open it or
-                        // jump to its folder; a folder is shown as itself.
                         bool isDir = false, isFile = false;
                         try { isDir = Directory.Exists(target); if (!isDir) isFile = File.Exists(target); }
                         catch { continue; }
                         if (!isDir && !isFile) continue;
 
-                        DateTime when;
-                        try { when = File.GetLastWriteTimeUtc(lnk); }
-                        catch { when = DateTime.MinValue; }
-
-                        candidates.Add(Tuple.Create(when, new PinnedFolder
+                        recentItems.Add(new PinnedFolder
                         {
                             DisplayName = Leaf(target),
                             TargetPath = target,
-                            LinkPath = lnk,
+                            LinkPath = entry.Item2,
                             Exists = true,
                             IsFile = isFile
-                        }));
+                        });
                     }
-
-                    var recentItems = candidates.OrderByDescending(t => t.Item1).Select(t => t.Item2);
-
-                    List<string> appSnapshot;
-                    lock (_gate) appSnapshot = _appRecent.ToList();
-                    var appItems = appSnapshot
-                        .Where(SafeDirExists)
-                        .Select(p => new PinnedFolder { DisplayName = Leaf(p), TargetPath = p, LinkPath = null, Exists = true, IsFile = false });
-
-                    // Folders opened through QuickPane come first, then the Windows Recent items.
-                    result = appItems.Concat(recentItems)
-                        .GroupBy(p => p.TargetPath, StringComparer.OrdinalIgnoreCase)
-                        .Select(g => g.First())
-                        .Take(cap)
-                        .ToList();
                 }
-                else
-                {
-                    List<string> appSnapshot;
-                    lock (_gate) appSnapshot = _appRecent.ToList();
-                    result = appSnapshot.Where(SafeDirExists)
-                        .Select(p => new PinnedFolder { DisplayName = Leaf(p), TargetPath = p, LinkPath = null, Exists = true })
-                        .Take(_settings.Current.RecentsMaxCount)
-                        .ToList();
-                }
+
+                // Folders opened through QuickPane come first, then the Windows Recent items.
+                result = appItems.Concat(recentItems)
+                    .GroupBy(p => p.TargetPath, StringComparer.OrdinalIgnoreCase)
+                    .Select(g => g.First())
+                    .Take(cap)
+                    .ToList();
             }
             catch (Exception ex)
             {
@@ -181,22 +208,25 @@ namespace QuickPane.Services
             }
 
             lock (_gate) { _items = result; }
+            WorkQueue.PostUI(() => { RecentsChanged?.Invoke(); });
         }
 
         public void RemoveFromRecents(PinnedFolder item)
         {
-            try
+            WorkQueue.Post(() =>
             {
-                if (!string.IsNullOrEmpty(item.LinkPath) && File.Exists(item.LinkPath)) File.Delete(item.LinkPath);
-                lock (_gate)
+                try
                 {
-                    if (_appRecent.RemoveAll(p => string.Equals(p, item.TargetPath, StringComparison.OrdinalIgnoreCase)) > 0)
-                        SaveAppRecent();
+                    if (!string.IsNullOrEmpty(item.LinkPath) && File.Exists(item.LinkPath)) File.Delete(item.LinkPath);
+                    lock (_gate)
+                    {
+                        if (_appRecent.RemoveAll(p => string.Equals(p, item.TargetPath, StringComparison.OrdinalIgnoreCase)) > 0)
+                            SaveAppRecent();
+                    }
+                    RescanCore();
                 }
-                Rescan();
-                RecentsChanged?.Invoke();
-            }
-            catch (Exception ex) { Log.Error("remove recent failed", ex); }
+                catch (Exception ex) { Log.Error("remove recent failed", ex); }
+            });
         }
 
         private static bool SafeDirExists(string path)
@@ -217,14 +247,8 @@ namespace QuickPane.Services
 
         private void OnFsEvent(object sender, FileSystemEventArgs e)
         {
-            // Resolve shortcuts on the UI (STA) thread, where the shell COM behaves predictably.
             if (_debounce == null)
-                _debounce = new Timer(_ =>
-                {
-                    var disp = System.Windows.Application.Current?.Dispatcher;
-                    if (disp != null) disp.BeginInvoke(new Action(() => { Rescan(); RecentsChanged?.Invoke(); }));
-                    else { Rescan(); RecentsChanged?.Invoke(); }
-                }, null, Timeout.Infinite, Timeout.Infinite);
+                _debounce = new Timer(_ => Rescan(), null, Timeout.Infinite, Timeout.Infinite);
             _debounce.Change(300, Timeout.Infinite);
         }
 

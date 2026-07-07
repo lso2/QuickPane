@@ -25,10 +25,18 @@ namespace QuickPane.Interop
             // SHELLDLL_DefView, and must never be treated as a dialog or it gets reparented and mangled.
             if (cls != "#32770") return false;
             // The classic dialog has a ComboBoxEx32 File name box; the modern (IFileDialog) one instead
-            // hosts the shell file view (SHELLDLL_DefView) with a plain ComboBox. Accept either.
-            bool hasCombo = HasDescendant(hwnd, "ComboBoxEx32");
-            bool hasView = HasDescendant(hwnd, "SHELLDLL_DefView");
-            return hasCombo || hasView; // plain message boxes have neither
+            // hosts the shell file view (SHELLDLL_DefView) with a plain ComboBox. Accept either. One
+            // enumeration pass checks both classes and gives up on huge trees (Photoshop dialogs carry
+            // dozens of DroverLord children), so probing a foreign dialog stays cheap.
+            bool found = false;
+            int visited = 0;
+            NM.EnumChildWindows(hwnd, (h, l) =>
+            {
+                var c = NM.ClassOf(h);
+                if (c == "ComboBoxEx32" || c == "SHELLDLL_DefView") { found = true; return false; }
+                return ++visited < 256;
+            }, IntPtr.Zero);
+            return found; // plain message boxes have neither marker
         }
 
         private static IntPtr FindDescendant(IntPtr root, string cls)
@@ -67,7 +75,7 @@ namespace QuickPane.Interop
                 IntPtr addr = FindAddressEdit(dlg);
                 if (addr != IntPtr.Zero)
                 {
-                    NM.SendMessage(addr, NM.WM_SETTEXT, IntPtr.Zero, path);
+                    SendTextTimeout(addr, path);
                     SendEnter(addr);
                     return true;
                 }
@@ -78,9 +86,9 @@ namespace QuickPane.Interop
                 {
                     IntPtr edit = FindFileNameEdit(dlg);
                     if (edit == IntPtr.Zero) return false;
-                    NM.SendMessage(edit, NM.WM_SETTEXT, IntPtr.Zero, path.EndsWith("\\") ? path : path + "\\");
+                    SendTextTimeout(edit, path.EndsWith("\\") ? path : path + "\\");
                     IntPtr ok = NM.GetDlgItem(dlg, NM.IDOK);
-                    if (ok != IntPtr.Zero) NM.SendMessage(ok, NM.BM_CLICK, IntPtr.Zero, IntPtr.Zero);
+                    if (ok != IntPtr.Zero) SendTimeout(ok, NM.BM_CLICK, IntPtr.Zero, IntPtr.Zero);
                     else SendEnter(edit);
                     return true;
                 }
@@ -93,13 +101,32 @@ namespace QuickPane.Interop
             catch (Exception ex) { Log.Error("dialog navigate", ex); return false; }
         }
 
+        // All sends into a foreign dialog use a timeout: the target app may be busy (Photoshop
+        // writing a file), and a plain SendMessage would block us for as long as it takes, which
+        // stalls the input queue our UI thread shares with Explorer in Inside mode.
+        private const uint SendTimeoutMs = 1500;
+
+        private static void SendTextTimeout(IntPtr hwnd, string text)
+        {
+            IntPtr result;
+            NM.SendMessageTimeout(hwnd, NM.WM_SETTEXT, IntPtr.Zero, text,
+                NM.SMTO_ABORTIFHUNG, SendTimeoutMs, out result);
+        }
+
+        private static void SendTimeout(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam)
+        {
+            IntPtr result;
+            NM.SendMessageTimeout(hwnd, msg, wParam, lParam,
+                NM.SMTO_ABORTIFHUNG, SendTimeoutMs, out result);
+        }
+
         // Press Enter inside a path box. Sending the key directly to the edit lets the address bar (or the
         // modern File name combo) navigate into a directory without committing the dialog.
         private static void SendEnter(IntPtr edit)
         {
-            NM.SendMessage(edit, NM.WM_KEYDOWN, new IntPtr(NM.VK_RETURN), IntPtr.Zero);
-            NM.SendMessage(edit, NM.WM_CHAR, new IntPtr(NM.VK_RETURN), IntPtr.Zero);
-            NM.SendMessage(edit, NM.WM_KEYUP, new IntPtr(NM.VK_RETURN), IntPtr.Zero);
+            SendTimeout(edit, NM.WM_KEYDOWN, new IntPtr(NM.VK_RETURN), IntPtr.Zero);
+            SendTimeout(edit, NM.WM_CHAR, new IntPtr(NM.VK_RETURN), IntPtr.Zero);
+            SendTimeout(edit, NM.WM_KEYUP, new IntPtr(NM.VK_RETURN), IntPtr.Zero);
         }
 
         // The address bar's editable path box (under "Address Band Root"). Setting it and pressing Enter

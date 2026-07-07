@@ -77,6 +77,8 @@
     <Compile Include="Interop\VirtualDesktop.cs" />
     <Compile Include="Models\Models.cs" />
     <Compile Include="Services\Log.cs" />
+    <Compile Include="Services\WorkQueue.cs" />
+    <Compile Include="Services\PathStatus.cs" />
     <Compile Include="Services\SettingsStore.cs" />
     <Compile Include="Services\GroupStore.cs" />
     <Compile Include="Services\RecentFoldersService.cs" />

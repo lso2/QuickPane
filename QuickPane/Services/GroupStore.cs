@@ -44,7 +44,14 @@ namespace QuickPane.Services
         {
             InstallWatcher();
             ScanOnce();
-            GroupsChanged?.Invoke();
+            RaiseChanged();
+        }
+
+        // GroupsChanged always fires on the UI thread, because scans can complete on the
+        // FileSystemWatcher debounce (worker) and every subscriber is a WPF control.
+        private void RaiseChanged()
+        {
+            WorkQueue.PostUI(() => { GroupsChanged?.Invoke(); });
         }
 
         private void SeedDefaultsIfEmpty()
@@ -86,13 +93,23 @@ namespace QuickPane.Services
 
         // ---- scanning --------------------------------------------------------
 
+        private readonly object _scanLock = new object();
+
         public void ScanOnce()
+        {
+            // Serialize scans: they can run from the UI (mutations) and the watcher debounce
+            // (worker) at the same time, and Materialize/recovery move things on disk.
+            lock (_scanLock) { ScanCore(); }
+        }
+
+        private void ScanCore()
         {
             var result = new List<PinnedGroup>();
             try
             {
                 var root = Root;
                 Directory.CreateDirectory(root);
+                RecoverTemps(root);
 
                 foreach (var dir in Directory.GetDirectories(root))
                 {
@@ -157,11 +174,56 @@ namespace QuickPane.Services
                 int o; string disp;
                 Split(Path.GetFileNameWithoutExtension(lnk), out o, out disp);
                 var target = ShellLink.ResolveTarget(lnk) ?? string.Empty;
-                bool exists = target.Length > 0 && SafeDirExists(target);
-                tab.Items.Add(new PinnedFolder { DisplayName = disp, TargetPath = target, LinkPath = lnk, Order = o, Exists = exists });
+                // Existence and file-vs-folder come from the background probe cache, never from a
+                // direct disk hit here: scans run on the UI thread after mutations, and probing a
+                // dead network target inline froze the input queue shared with Explorer.
+                bool exists = target.Length > 0 && PathStatus.IsAlive(target);
+                bool isFile = target.Length > 0 && PathStatus.IsFile(target);
+                tab.Items.Add(new PinnedFolder { DisplayName = disp, TargetPath = target, LinkPath = lnk, Order = o, Exists = exists, IsFile = isFile });
             }
             tab.Items = tab.Items.OrderBy(i => i.Order)
                 .ThenBy(i => i.DisplayName, StringComparer.CurrentCultureIgnoreCase).ToList();
+        }
+
+        // Bring back anything stranded under a temp name by a reorder that died halfway (crash,
+        // locked folder, antivirus). Recovered entries sort to the end but keep their contents.
+        private static void RecoverTemps(string root)
+        {
+            try
+            {
+                foreach (var dir in Directory.GetDirectories(root, "~ord~*"))
+                    TryRename(dir, Path.Combine(root, "99_Recovered"), isDir: true);
+                foreach (var group in Directory.GetDirectories(root))
+                {
+                    foreach (var sub in Directory.GetDirectories(group, "~ord~*"))
+                        TryRename(sub, Path.Combine(group, "99_Recovered"), isDir: true);
+                    foreach (var tabDir in Directory.GetDirectories(group))
+                    {
+                        foreach (var f in Directory.GetFiles(tabDir, "~ord~*.lnk"))
+                            TryRename(f, Path.Combine(tabDir, "999_Recovered.lnk"), isDir: false);
+                        foreach (var f in Directory.GetFiles(tabDir, "~new~*.lnk"))
+                            TryRename(f, Path.Combine(tabDir, "999_Recovered.lnk"), isDir: false);
+                    }
+                }
+            }
+            catch (Exception ex) { Log.Error("recover temps", ex); }
+        }
+
+        private static void TryRename(string src, string destBase, bool isDir)
+        {
+            try
+            {
+                string dest = destBase;
+                int n = 1;
+                string dir = Path.GetDirectoryName(destBase);
+                string name = Path.GetFileNameWithoutExtension(destBase);
+                string ext = Path.GetExtension(destBase);
+                while (isDir ? Directory.Exists(dest) : File.Exists(dest))
+                    dest = Path.Combine(dir, name + " (" + (++n) + ")" + ext);
+                if (isDir) Directory.Move(src, dest); else File.Move(src, dest);
+                Log.Info("recovered stranded temp '" + src + "' -> '" + dest + "'");
+            }
+            catch (Exception ex) { Log.Error("recover temp '" + src + "'", ex); }
         }
 
         private static void Materialize(string groupDir, string name, string[] looseLnks)
@@ -179,7 +241,42 @@ namespace QuickPane.Services
             catch (Exception ex) { Log.Error("materialize failed", ex); }
         }
 
-        private static bool SafeDirExists(string path) { try { return Directory.Exists(path); } catch { return false; } }
+        // Two-phase rename used by every reorder: move to temp names, then to final names. If any
+        // step throws (locked folder, antivirus hold), roll the temps back so nothing is left
+        // stranded under a ~ord~ name. ScanCore's RecoverTemps is the second net for a hard crash.
+        private static void TwoPhaseRename(List<Tuple<string, string, string>> plan, bool isDir)
+        {
+            var done = new List<Tuple<string, string, string>>(); // original -> temp completed
+            try
+            {
+                foreach (var step in plan)
+                {
+                    if (isDir ? !Directory.Exists(step.Item1) : !File.Exists(step.Item1)) continue;
+                    if (isDir) Directory.Move(step.Item1, step.Item2); else File.Move(step.Item1, step.Item2);
+                    done.Add(step);
+                }
+                foreach (var step in done)
+                {
+                    if (isDir) Directory.Move(step.Item2, step.Item3); else File.Move(step.Item2, step.Item3);
+                }
+            }
+            catch
+            {
+                // Put whatever is still sitting at a temp name back where it came from.
+                foreach (var step in done)
+                {
+                    try
+                    {
+                        if (isDir ? Directory.Exists(step.Item2) : File.Exists(step.Item2))
+                        {
+                            if (isDir) Directory.Move(step.Item2, step.Item1); else File.Move(step.Item2, step.Item1);
+                        }
+                    }
+                    catch { /* recovery of stragglers happens in RecoverTemps */ }
+                }
+                throw;
+            }
+        }
 
         // ---- group display name ----------------------------------------------
         public static string DisplayName(PinnedGroup g)
@@ -209,7 +306,7 @@ namespace QuickPane.Services
             Directory.CreateDirectory(folder);
             Directory.CreateDirectory(Path.Combine(folder, "01_" + name)); // first tab
             ScanOnce();
-            GroupsChanged?.Invoke();
+            RaiseChanged();
             return _groups.FirstOrDefault(g => string.Equals(g.FolderPath, folder, StringComparison.OrdinalIgnoreCase));
         }
 
@@ -269,19 +366,18 @@ namespace QuickPane.Services
             try
             {
                 var parent = Root;
-                var temp = new List<Tuple<string, string>>();
+                var plan = new List<Tuple<string, string, string>>();
                 for (int i = 0; i < ordered.Count; i++)
                 {
                     var g = ordered[i];
-                    if (!Directory.Exists(g.FolderPath)) continue;
-                    var tmp = Path.Combine(parent, "~ord~" + Guid.NewGuid().ToString("N"));
-                    Directory.Move(g.FolderPath, tmp);
-                    temp.Add(Tuple.Create(tmp, (i + 1).ToString("00") + "_" + g.Name));
+                    plan.Add(Tuple.Create(g.FolderPath,
+                        Path.Combine(parent, "~ord~" + Guid.NewGuid().ToString("N")),
+                        Path.Combine(parent, (i + 1).ToString("00") + "_" + g.Name)));
                 }
-                foreach (var t in temp) Directory.Move(t.Item1, Path.Combine(parent, t.Item2));
-                ScanOnce(); GroupsChanged?.Invoke();
+                TwoPhaseRename(plan, isDir: true);
             }
             catch (Exception ex) { Log.Error("ReorderGroups failed", ex); }
+            ScanOnce(); RaiseChanged();
         }
 
         // Move every tab of source into dest, then delete source (drag a group onto a group).
@@ -308,7 +404,7 @@ namespace QuickPane.Services
             int order = NextTabOrder(group.FolderPath);
             var dir = UniqueDir(group.FolderPath, order, name);
             Directory.CreateDirectory(dir);
-            ScanOnce(); GroupsChanged?.Invoke();
+            ScanOnce(); RaiseChanged();
             return _groups.SelectMany(g => g.Tabs).FirstOrDefault(t => string.Equals(t.FolderPath, dir, StringComparison.OrdinalIgnoreCase));
         }
 
@@ -350,19 +446,18 @@ namespace QuickPane.Services
             try
             {
                 var parent = group.FolderPath;
-                var temp = new List<Tuple<string, string>>();
+                var plan = new List<Tuple<string, string, string>>();
                 for (int i = 0; i < ordered.Count; i++)
                 {
                     var t = ordered[i];
-                    if (!Directory.Exists(t.FolderPath)) continue;
-                    var tmp = Path.Combine(parent, "~ord~" + Guid.NewGuid().ToString("N"));
-                    Directory.Move(t.FolderPath, tmp);
-                    temp.Add(Tuple.Create(tmp, (i + 1).ToString("00") + "_" + t.Name));
+                    plan.Add(Tuple.Create(t.FolderPath,
+                        Path.Combine(parent, "~ord~" + Guid.NewGuid().ToString("N")),
+                        Path.Combine(parent, (i + 1).ToString("00") + "_" + t.Name)));
                 }
-                foreach (var x in temp) Directory.Move(x.Item1, Path.Combine(parent, x.Item2));
-                ScanOnce(); GroupsChanged?.Invoke();
+                TwoPhaseRename(plan, isDir: true);
             }
             catch (Exception ex) { Log.Error("ReorderTabs failed", ex); }
+            ScanOnce(); RaiseChanged();
         }
 
         // Move a tab into another group as a tab (optionally at an index).
@@ -394,6 +489,7 @@ namespace QuickPane.Services
         }
 
         // ---- pins ------------------------------------------------------------
+        // Pins may target folders or files; both are stored as ordinary .lnk shortcuts.
         public void AddPin(PinnedGroup group, string targetPath)
         {
             if (group == null) return;
@@ -402,9 +498,15 @@ namespace QuickPane.Services
 
         public void AddPin(PinnedTab tab, string targetPath)
         {
+            AddPins(tab, new[] { targetPath });
+        }
+
+        /// <summary>Pin several targets at once with a single rescan at the end.</summary>
+        public void AddPins(PinnedTab tab, System.Collections.Generic.IEnumerable<string> targetPaths)
+        {
             try
             {
-                if (tab == null || string.IsNullOrEmpty(targetPath)) return;
+                if (tab == null || targetPaths == null) return;
                 var dir = tab.FolderPath;
                 if (IsGroupFolder(dir)) // implicit empty tab, materialize a real subfolder
                 {
@@ -412,10 +514,16 @@ namespace QuickPane.Services
                     Directory.CreateDirectory(dir);
                 }
                 int order = NextPinOrder(dir);
-                string leaf = SafeLeaf(targetPath);
-                string lnk = UniqueLink(dir, order, leaf);
-                ShellLink.Create(lnk, targetPath, leaf);
-                ScanOnce(); GroupsChanged?.Invoke();
+                bool any = false;
+                foreach (var targetPath in targetPaths)
+                {
+                    if (string.IsNullOrEmpty(targetPath)) continue;
+                    string leaf = SafeLeaf(targetPath);
+                    string lnk = UniqueLink(dir, order++, leaf);
+                    ShellLink.Create(lnk, targetPath, leaf);
+                    any = true;
+                }
+                if (any) { ScanOnce(); RaiseChanged(); }
             }
             catch (Exception ex) { Log.Error("AddPin failed", ex); }
         }
@@ -447,18 +555,17 @@ namespace QuickPane.Services
                 if (index > order.Count) index = order.Count;
                 order.Insert(index, new PinSort { Path = tmpNew, Name = leaf });
 
-                var temps = new List<Tuple<string, string>>();
+                var plan = new List<Tuple<string, string, string>>();
                 for (int i = 0; i < order.Count; i++)
                 {
                     var o = order[i];
-                    if (!File.Exists(o.Path)) continue;
-                    var t = Path.Combine(dir, "~ord~" + Guid.NewGuid().ToString("N") + ".lnk");
-                    File.Move(o.Path, t);
-                    temps.Add(Tuple.Create(t, (i + 1).ToString("000") + "_" + o.Name + ".lnk"));
+                    plan.Add(Tuple.Create(o.Path,
+                        Path.Combine(dir, "~ord~" + Guid.NewGuid().ToString("N") + ".lnk"),
+                        Path.Combine(dir, (i + 1).ToString("000") + "_" + o.Name + ".lnk")));
                 }
-                foreach (var t in temps) File.Move(t.Item1, Path.Combine(dir, t.Item2));
+                TwoPhaseRename(plan, isDir: false);
 
-                ScanOnce(); GroupsChanged?.Invoke();
+                ScanOnce(); RaiseChanged();
             }
             catch (Exception ex) { Log.Error("AddPinAtIndex failed", ex); }
         }
@@ -516,19 +623,18 @@ namespace QuickPane.Services
             try
             {
                 var dir = tab.FolderPath;
-                var temp = new List<Tuple<string, string>>();
+                var plan = new List<Tuple<string, string, string>>();
                 for (int i = 0; i < ordered.Count; i++)
                 {
                     var p = ordered[i];
-                    if (!File.Exists(p.LinkPath)) continue;
-                    var tmp = Path.Combine(dir, "~ord~" + Guid.NewGuid().ToString("N") + ".lnk");
-                    File.Move(p.LinkPath, tmp);
-                    temp.Add(Tuple.Create(tmp, (i + 1).ToString("000") + "_" + p.DisplayName + ".lnk"));
+                    plan.Add(Tuple.Create(p.LinkPath,
+                        Path.Combine(dir, "~ord~" + Guid.NewGuid().ToString("N") + ".lnk"),
+                        Path.Combine(dir, (i + 1).ToString("000") + "_" + p.DisplayName + ".lnk")));
                 }
-                foreach (var t in temp) File.Move(t.Item1, Path.Combine(dir, t.Item2));
-                ScanOnce(); GroupsChanged?.Invoke();
+                TwoPhaseRename(plan, isDir: false);
             }
             catch (Exception ex) { Log.Error("ReorderPins failed", ex); }
+            ScanOnce(); RaiseChanged();
         }
 
         // ---- cross-profile group operations ----------------------------------
@@ -710,7 +816,7 @@ namespace QuickPane.Services
 
         private void Try(Action action)
         {
-            try { action(); ScanOnce(); GroupsChanged?.Invoke(); }
+            try { action(); ScanOnce(); RaiseChanged(); }
             catch (Exception ex) { Log.Error("group mutation failed", ex); }
         }
 
@@ -735,8 +841,10 @@ namespace QuickPane.Services
 
         private void OnFsEvent(object sender, FileSystemEventArgs e)
         {
+            // Scan on the worker, not on the watcher's threadpool callback, so the timer thread is
+            // never tied up by a slow disk and the scan is serialized with everything else.
             if (_debounce == null)
-                _debounce = new Timer(_ => { ScanOnce(); GroupsChanged?.Invoke(); }, null, Timeout.Infinite, Timeout.Infinite);
+                _debounce = new Timer(_ => WorkQueue.Post(() => { ScanOnce(); RaiseChanged(); }), null, Timeout.Infinite, Timeout.Infinite);
             _debounce.Change(250, Timeout.Infinite);
         }
 

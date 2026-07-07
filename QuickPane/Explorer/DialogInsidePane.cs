@@ -29,6 +29,9 @@ namespace QuickPane.Explorer
         private bool _attached, _disposed;
         private bool _applying, _disabled, _shiftedOnce;
         private int _relayoutCount, _windowStart;
+        private int _lastW, _lastH;      // dialog outer size at the previous relayout pass
+        private int _attachTick;         // settle window for controls that are built lazily
+        private int _lastFullPass;       // throttles full passes triggered by pure moves/sweeps
 
         /// <summary>Set when the dialog fought the inside shift (reset its own size), so the watcher can
         /// drop this dialog to the non-invasive beside follower instead.</summary>
@@ -81,10 +84,20 @@ namespace QuickPane.Explorer
 
                 _attached = true;
                 _shiftedOnce = true;
+                _attachTick = Environment.TickCount;
+                _lastW = _origWinW + _width;
+                _lastH = _origWinH;
                 Log.Info("dialog inside pane attached to " + _dlg.ToString("X"));
                 return true;
             }
-            catch (Exception ex) { Log.Error("DialogInsidePane attach", ex); return false; }
+            catch (Exception ex)
+            {
+                // The dialog can close (or its HwndSource die) between widening and hosting; put the
+                // children and the dialog size back so a failed attach never leaves a shifted wreck.
+                Log.Error("DialogInsidePane attach", ex);
+                Restore();
+                return false;
+            }
         }
 
         private void CaptureChildren()
@@ -153,7 +166,31 @@ namespace QuickPane.Explorer
         /// reset their own size, which oscillated many times a second.</summary>
         public void Relayout()
         {
-            if (!_attached || _disposed || _disabled || _applying || _host == null || !NM.IsWindow(_dlg)) return;
+            if (!_attached || _disposed || _applying || _host == null || !NM.IsWindow(_dlg)) return;
+
+            NM.RECT wr;
+            if (!NM.GetWindowRect(_dlg, out wr)) return;
+            bool sizeChanged = wr.Width != _lastW || wr.Height != _lastH;
+            _lastW = wr.Width; _lastH = wr.Height;
+
+            int now = Environment.TickCount;
+            bool settling = now - _attachTick < 2000; // lazily-built controls appear shortly after attach
+
+            // Dragging the dialog fires a location event per pixel, but its controls are positioned
+            // in client coordinates and move with it, so a pure move needs no work at all. Running a
+            // full pass anyway used to trip the back-off after ~1.5 s of dragging, permanently
+            // disabling maintenance for that dialog, which is what glitched Save dialogs afterwards.
+            // Pure moves and sweep ticks get at most one full pass per 1.2 s as a safety net.
+            if (!sizeChanged && !settling && now - _lastFullPass < 1200) return;
+            _lastFullPass = now;
+
+            // A real size change is new information, so a backed-off dialog gets another chance.
+            if (_disabled)
+            {
+                if (!sizeChanged) return;
+                _disabled = false;
+                _relayoutCount = 0;
+            }
 
             // Detect the dialog re-laying out the controls we shifted. Photoshop's Save rebuilds itself on
             // navigation and moves its controls back over our pane (it does not change the window width).
@@ -172,8 +209,7 @@ namespace QuickPane.Explorer
                     total++;
                     if (Math.Abs(pt.X - (kv.Value.Left + _width)) > 3) off++; // not at the shifted target
                 }
-                NM.RECT wr;
-                bool widthReset = NM.GetWindowRect(_dlg, out wr) && wr.Width < _origWinW + _width - 10;
+                bool widthReset = wr.Width < _origWinW + _width - 10;
                 if ((total > 0 && off > total / 2) || widthReset)
                 {
                     Failed = true;
@@ -183,7 +219,6 @@ namespace QuickPane.Explorer
             }
 
             // Back off if a dialog keeps fighting the layout, so a stubborn dialog can never loop forever.
-            int now = Environment.TickCount;
             if (now - _windowStart > 1500) { _windowStart = now; _relayoutCount = 0; }
             if (++_relayoutCount > 12) { _disabled = true; Log.Info("DialogInsidePane backed off " + _dlg.ToString("X")); return; }
 

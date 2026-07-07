@@ -13,6 +13,14 @@ namespace QuickPane.Interop
     /// </summary>
     internal static class ExplorerNavigator
     {
+        /// <summary>Navigate on the background worker. The synchronous version enumerates shell
+        /// windows over cross-process COM, which blocks for as long as Explorer is busy; doing that
+        /// on the UI thread stalled the input queue the pane shares with Explorer in Inside mode.</summary>
+        public static void NavigateAsync(IntPtr topLevelHwnd, string path)
+        {
+            WorkQueue.Post(() => Navigate(topLevelHwnd, path));
+        }
+
         /// <summary>Navigate the Explorer window identified by topLevelHwnd to path, in place.</summary>
         public static bool Navigate(IntPtr topLevelHwnd, string path)
         {

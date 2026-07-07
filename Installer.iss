@@ -9,7 +9,7 @@
 ; first so QuickPane.exe exists at the path in [Files].
 
 #define MyAppName "QuickPane"
-#define MyAppVersion "3.2.15"
+#define MyAppVersion "3.4.1"
 #define MyAppPublisher "PlexPixel"
 #define MyAppExe "QuickPane.exe"
 

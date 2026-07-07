@@ -50,12 +50,16 @@ namespace QuickPane.UI
             BuildSections();
         }
 
+        // Groups/recents/drive changes are handled inside their own sections, so a navigation that
+        // touches Recent no longer rebuilds every section of every open sidebar. Only theme and
+        // settings changes rebuild the whole pane, and those rebuilds are coalesced: a save fires
+        // once per control but the pane is rebuilt once per pump.
+        private bool _rebuildQueued;
+
         private void Wire()
         {
             if (_wired) return;
             _wired = true;
-            if (App.Groups != null) App.Groups.GroupsChanged += OnDataChanged;
-            if (App.Recents != null) App.Recents.RecentsChanged += OnDataChanged;
             if (App.Theme != null) App.Theme.ThemeChanged += OnDataChanged;
             if (App.Settings != null) App.Settings.Changed += OnSettingsChanged;
         }
@@ -64,20 +68,29 @@ namespace QuickPane.UI
         {
             if (!_wired) return;
             _wired = false;
-            if (App.Groups != null) App.Groups.GroupsChanged -= OnDataChanged;
-            if (App.Recents != null) App.Recents.RecentsChanged -= OnDataChanged;
             if (App.Theme != null) App.Theme.ThemeChanged -= OnDataChanged;
             if (App.Settings != null) App.Settings.Changed -= OnSettingsChanged;
         }
 
         private void OnDataChanged()
         {
-            Dispatcher.BeginInvoke(new Action(BuildSections));
+            QueueBuild();
         }
 
         private void OnSettingsChanged(object sender, EventArgs e)
         {
-            Dispatcher.BeginInvoke(new Action(BuildSections));
+            QueueBuild();
+        }
+
+        private void QueueBuild()
+        {
+            if (_rebuildQueued) return;
+            _rebuildQueued = true;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                _rebuildQueued = false;
+                BuildSections();
+            }), System.Windows.Threading.DispatcherPriority.Background);
         }
 
         private void BuildSections()

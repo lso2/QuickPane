@@ -52,6 +52,20 @@ namespace QuickPane.Interop
         [DllImport("user32.dll")]
         public static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
 
+        // Timeout variants for driving other apps' dialogs. A plain SendMessage to a busy target
+        // (Photoshop mid-save) blocks the caller indefinitely, and our caller shares Explorer's
+        // input queue, so every cross-process send must be able to give up.
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern IntPtr SendMessageTimeout(IntPtr hWnd, int Msg, IntPtr wParam, string lParam,
+            uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr SendMessageTimeout(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam,
+            uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
+
+        public const uint SMTO_NORMAL = 0x0000;
+        public const uint SMTO_ABORTIFHUNG = 0x0002;
+
         public const int WM_SETTEXT = 0x000C;
         public const int WM_COMMAND = 0x0111;
         public const int BM_CLICK = 0x00F5;

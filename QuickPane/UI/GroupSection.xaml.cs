@@ -34,33 +34,116 @@ namespace QuickPane.UI
         public GroupSection()
         {
             InitializeComponent();
-            // Empty space in the section is a drop target so a tab dropped here becomes its own group.
+            // Empty space in the section is a drop target: a tab dropped here becomes its own group,
+            // and files/folders dropped here are pinned to the last group.
             Root.Background = Brushes.Transparent;
             Root.AllowDrop = true;
             Root.DragOver += OnRootDragOver;
             Root.Drop += OnRootDrop;
+            Root.DragLeave += (s, e) => FolderTreeNode.ClearDropHighlight();
+            Unloaded += (s, e) => Unwire();
+        }
+
+        // The section listens for its own data so a groups change repaints just this section, and
+        // probe/icon results arriving from the worker repaint it with the corrected state.
+        private bool _sectionWired;
+        private bool _rebuildQueued;
+
+        private void Wire()
+        {
+            if (_sectionWired) return;
+            _sectionWired = true;
+            if (App.Groups != null) App.Groups.GroupsChanged += QueueRebuild;
+            PathStatus.Changed += QueueRebuild;
+        }
+
+        private void Unwire()
+        {
+            if (!_sectionWired) return;
+            _sectionWired = false;
+            if (App.Groups != null) App.Groups.GroupsChanged -= QueueRebuild;
+            PathStatus.Changed -= QueueRebuild;
+        }
+
+        private void QueueRebuild()
+        {
+            if (_rebuildQueued) return;
+            _rebuildQueued = true;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                _rebuildQueued = false;
+                if (_navigate != null) Build(_navigate);
+            }), System.Windows.Threading.DispatcherPriority.Background);
         }
 
         private void OnRootDragOver(object sender, DragEventArgs e)
         {
             UpdateGhost(e);
-            e.Effects = e.Data.GetDataPresent(TabFormat) ? DragDropEffects.Move : DragDropEffects.None;
+            if (e.Data.GetDataPresent(TabFormat)) e.Effects = DragDropEffects.Move;
+            // The Link cursor tells the truth here: dropping on empty space creates a shortcut pin.
+            else if (e.Data.GetDataPresent(DataFormats.FileDrop)) e.Effects = DragDropEffects.Link;
+            else e.Effects = DragDropEffects.None;
             e.Handled = true;
         }
 
         private void OnRootDrop(object sender, DragEventArgs e)
         {
-            if (!e.Data.GetDataPresent(TabFormat)) return;
-            e.Handled = true;
-            var tr = e.Data.GetData(TabFormat) as TabRef;
-            if (tr == null) return;
-            var src = FindTab(tr.TabFolder);
-            if (src.Item2 != null) App.Groups.MoveTabToNewGroup(src.Item1, src.Item2);
+            if (e.Data.GetDataPresent(TabFormat))
+            {
+                e.Handled = true;
+                var tr = e.Data.GetData(TabFormat) as TabRef;
+                if (tr == null) return;
+                var src = FindTab(tr.TabFolder);
+                if (src.Item2 != null) App.Groups.MoveTabToNewGroup(src.Item1, src.Item2);
+                return;
+            }
+            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                e.Handled = true;
+                FolderTreeNode.ClearDropHighlight();
+                PinToLastGroup(e.Data.GetData(DataFormats.FileDrop) as string[]);
+            }
+        }
+
+        // Pin dropped paths to the last group's active tab; with no groups yet, create one.
+        private static void PinToLastGroup(string[] paths)
+        {
+            if (paths == null || paths.Length == 0 || App.Groups == null) return;
+            WorkQueue.Post(() =>
+            {
+                try
+                {
+                    var groups = App.Groups.Groups;
+                    var last = groups.Count > 0 ? groups[groups.Count - 1] : App.Groups.CreateGroup("Pinned");
+                    if (last == null) return;
+                    App.Groups.AddPins(last.Active, paths.Where(PathIsReal).ToList());
+                }
+                catch (Exception ex) { Log.Error("pin to last group", ex); }
+            });
+        }
+
+        // Pin dropped paths (files or folders) to a specific group. Runs on the worker because it
+        // verifies the paths and writes .lnk files.
+        private static void PinPaths(PinnedGroup group, string[] paths)
+        {
+            if (group == null || paths == null || paths.Length == 0 || App.Groups == null) return;
+            WorkQueue.Post(() =>
+            {
+                try { App.Groups.AddPins(group.Active, paths.Where(PathIsReal).ToList()); }
+                catch (Exception ex) { Log.Error("pin paths", ex); }
+            });
+        }
+
+        private static bool PathIsReal(string path)
+        {
+            try { return !string.IsNullOrEmpty(path) && (System.IO.Directory.Exists(path) || System.IO.File.Exists(path)); }
+            catch { return false; }
         }
 
         public void Build(Action<string> navigate)
         {
             _navigate = navigate;
+            Wire();
             Root.Children.Clear();
             _adorners.Clear();
             if (App.Groups == null) return;
@@ -85,14 +168,21 @@ namespace QuickPane.UI
                 ? BuildTabRow(group, items, out chevron)
                 : BuildSingleHeader(group, items, out chevron);
 
-            // active tab pins
+            // active tab pins (folders and files alike; files open, folders navigate)
             var active = group.Active;
             if (active != null)
             {
+                var capturedGroup = group;
+                var pinCtx = new PinDropContext
+                {
+                    GroupName = GroupStore.DisplayName(group),
+                    PinHere = paths => PinPaths(capturedGroup, paths)
+                };
                 foreach (var pin in active.Items)
                 {
                     var captured = pin;
-                    var node = new FolderTreeNode(pin.DisplayName, pin.TargetPath, pin.Exists, _navigate, 0);
+                    var node = new FolderTreeNode(pin.DisplayName, pin.TargetPath, pin.Exists, _navigate, 0,
+                        captured.IsFile, null, pinCtx);
                     node.Row.ContextMenu = BuildPinMenu(group, active, captured);
                     WirePinDragSource(node.Row, captured);
                     items.Children.Add(node);
@@ -286,7 +376,7 @@ namespace QuickPane.UI
             UpdateGhost(e);
             RemoveTabPlaceholder();
             if (e.Data.GetDataPresent(GroupFormat) || e.Data.GetDataPresent(PinFormat)) e.Effects = DragDropEffects.Move;
-            else if (e.Data.GetDataPresent(DataFormats.FileDrop)) e.Effects = DragDropEffects.Copy;
+            else if (e.Data.GetDataPresent(DataFormats.FileDrop)) e.Effects = DragDropEffects.Link; // dropping here pins (creates a shortcut)
             else e.Effects = DragDropEffects.None;
         }
 
@@ -421,7 +511,7 @@ namespace QuickPane.UI
                 {
                     HideAdorner(target);
                     if (e.Data.GetDataPresent(TabFormat) || e.Data.GetDataPresent(PinFormat)) e.Effects = DragDropEffects.Move;
-                    else if (e.Data.GetDataPresent(DataFormats.FileDrop)) e.Effects = DragDropEffects.Copy;
+                    else if (e.Data.GetDataPresent(DataFormats.FileDrop)) e.Effects = DragDropEffects.Link; // dropping here pins (creates a shortcut)
                     else e.Effects = DragDropEffects.None;
                 }
                 e.Handled = true;
@@ -475,8 +565,8 @@ namespace QuickPane.UI
                 }
                 if (e.Data.GetDataPresent(DataFormats.FileDrop))
                 {
-                    foreach (var path in (string[])e.Data.GetData(DataFormats.FileDrop))
-                        if (System.IO.Directory.Exists(path)) App.Groups.AddPin(group, path);
+                    // Dropping on a group header/tab row pins the items (files or folders).
+                    PinPaths(group, e.Data.GetData(DataFormats.FileDrop) as string[]);
                     return;
                 }
                 if (e.Data.GetDataPresent(PinFormat))
@@ -530,7 +620,8 @@ namespace QuickPane.UI
                 int index; double lineY;
                 ComputeItemDrop(items, e, out index, out lineY);
                 Adorner(items).Update(lineY);
-                e.Effects = e.Data.GetDataPresent(PinFormat) ? DragDropEffects.Move : DragDropEffects.Copy;
+                // Reordering a pin is a move; a FileDrop between rows pins there (creates a shortcut).
+                e.Effects = e.Data.GetDataPresent(PinFormat) ? DragDropEffects.Move : DragDropEffects.Link;
             };
             items.DragLeave += (s, e) => HideAdorner(items);
             items.Drop += (s, e) =>
@@ -548,9 +639,21 @@ namespace QuickPane.UI
                 ComputeItemDrop(items, e, out index, out lineY);
                 if (e.Data.GetDataPresent(DataFormats.FileDrop))
                 {
+                    // Pin files or folders at the drop line. Verification and .lnk writes run on the
+                    // worker so a slow source volume cannot stall the input-attached UI thread.
+                    FolderTreeNode.ClearDropHighlight();
+                    var dropped = e.Data.GetData(DataFormats.FileDrop) as string[];
+                    var tab = group.Active;
                     int at = index;
-                    foreach (var path in (string[])e.Data.GetData(DataFormats.FileDrop))
-                        if (System.IO.Directory.Exists(path)) { App.Groups.AddPinAtIndex(group.Active, path, at); at++; }
+                    WorkQueue.Post(() =>
+                    {
+                        try
+                        {
+                            foreach (var path in dropped ?? new string[0])
+                                if (PathIsReal(path)) { App.Groups.AddPinAtIndex(tab, path, at); at++; }
+                        }
+                        catch (Exception ex) { Log.Error("pin at index", ex); }
+                    });
                     return;
                 }
                 if (e.Data.GetDataPresent(PinFormat))
@@ -624,6 +727,7 @@ namespace QuickPane.UI
             menu.Items.Add(Item("Add tab", () => { var v = TextPrompt.Ask("New tab name", ""); if (!string.IsNullOrWhiteSpace(v)) App.Groups.AddTab(group, v); }));
             menu.Items.Add(Item("Add group below", () => { var v = TextPrompt.Ask("New group name", ""); if (!string.IsNullOrWhiteSpace(v)) App.Groups.CreateGroupAfter(group, v); }));
             menu.Items.Add(Item("Add folder...", () => { var p = PickFolder(); if (!string.IsNullOrEmpty(p)) App.Groups.AddPin(group, p); }));
+            menu.Items.Add(Item("Add file...", () => { var p = PickFile(); if (!string.IsNullOrEmpty(p)) App.Groups.AddPin(group, p); }));
             menu.Items.Add(Item("Move up", () => App.Groups.MoveGroup(group, -1)));
             menu.Items.Add(Item("Move down", () => App.Groups.MoveGroup(group, +1)));
             menu.Items.Add(new Separator());
@@ -647,8 +751,24 @@ namespace QuickPane.UI
         private ContextMenu BuildPinMenu(PinnedGroup group, PinnedTab tab, PinnedFolder pin)
         {
             var menu = new ContextMenu();
-            menu.Items.Add(Item("Open", () => { if (pin.Exists) _navigate(pin.TargetPath); }));
-            menu.Items.Add(Item("Open in new window", () => ExplorerNavigator.OpenNewWindow(pin.TargetPath)));
+            if (pin.IsFile)
+            {
+                menu.Items.Add(Item("Open file", () => OpenPinFile(pin)));
+                menu.Items.Add(Item("Open containing folder", () =>
+                {
+                    try
+                    {
+                        var d = System.IO.Path.GetDirectoryName(pin.TargetPath);
+                        if (!string.IsNullOrEmpty(d)) _navigate(d);
+                    }
+                    catch (Exception ex) { Log.Error("open containing folder", ex); }
+                }));
+            }
+            else
+            {
+                menu.Items.Add(Item("Open", () => { if (pin.Exists) _navigate(pin.TargetPath); }));
+                menu.Items.Add(Item("Open in new window", () => ExplorerNavigator.OpenNewWindow(pin.TargetPath)));
+            }
             menu.Items.Add(new Separator());
             menu.Items.Add(Item("Rename", () => { var v = TextPrompt.Ask("Rename pin", pin.DisplayName); if (v != null) App.Groups.RenamePin(pin, v); }));
             menu.Items.Add(new Separator());
@@ -771,6 +891,7 @@ namespace QuickPane.UI
             SidebarControl.SuppressAutoHide = false;
             try { if (_ghost != null && _ghostLayer != null) _ghostLayer.Remove(_ghost); } catch { }
             _ghost = null; _ghostLayer = null;
+            FolderTreeNode.ClearDropHighlight(); // no row keeps a drag highlight after any drag ends
         }
 
         private DropLineAdorner Adorner(FrameworkElement host)
@@ -805,6 +926,22 @@ namespace QuickPane.UI
                 dlg.Description = "Pick a folder to pin";
                 return dlg.ShowDialog() == WinForms.DialogResult.OK ? dlg.SelectedPath : null;
             }
+        }
+
+        private static string PickFile()
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog { Title = "Pick a file to pin" };
+            return dlg.ShowDialog() == true ? dlg.FileName : null;
+        }
+
+        private static void OpenPinFile(PinnedFolder pin)
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(
+                    new System.Diagnostics.ProcessStartInfo(pin.TargetPath) { UseShellExecute = true });
+            }
+            catch (Exception ex) { Log.Error("open pinned file", ex); }
         }
 
         private static void SafeClipboard(string text)

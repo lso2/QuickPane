@@ -15,15 +15,48 @@ namespace QuickPane.UI
     {
         private Action<string> _navigate;
         private bool _expanded = true;
+        private bool _wired;
+        private bool _rebuildQueued;
 
         public RecentsSection()
         {
             InitializeComponent();
+            Unloaded += (s, e) => Unwire();
+        }
+
+        // The section listens for its own data (recents list, probe/icon results) so a navigation
+        // repaints just this section instead of every section of every sidebar.
+        private void Wire()
+        {
+            if (_wired) return;
+            _wired = true;
+            if (App.Recents != null) App.Recents.RecentsChanged += QueueRebuild;
+            PathStatus.Changed += QueueRebuild;
+        }
+
+        private void Unwire()
+        {
+            if (!_wired) return;
+            _wired = false;
+            if (App.Recents != null) App.Recents.RecentsChanged -= QueueRebuild;
+            PathStatus.Changed -= QueueRebuild;
+        }
+
+        private void QueueRebuild()
+        {
+            if (_rebuildQueued) return;
+            _rebuildQueued = true;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                _rebuildQueued = false;
+                if (_navigate != null) Build(_navigate);
+            }), System.Windows.Threading.DispatcherPriority.Background);
         }
 
         public void Build(Action<string> navigate)
         {
             _navigate = navigate;
+            Wire();
             Root.Children.Clear();
             if (App.Recents == null) return;
 
@@ -87,8 +120,9 @@ namespace QuickPane.UI
                 menu.Items.Add(Item("Open in new window", () => ExplorerNavigator.OpenNewWindow(rec.TargetPath)));
             }
 
-            string pinTarget = FolderOf(rec);
-            var pinTo = new MenuItem { Header = "Pin folder to group" };
+            // Files pin as file shortcuts now, so a recent file pins itself, not just its folder.
+            string pinTarget = rec.TargetPath;
+            var pinTo = new MenuItem { Header = rec.IsFile ? "Pin file to group" : "Pin folder to group" };
             if (App.Groups != null && !string.IsNullOrEmpty(pinTarget))
             {
                 foreach (var g in App.Groups.Groups)

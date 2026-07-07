@@ -61,11 +61,23 @@ namespace QuickPane.UI
         }
     }
 
-    /// <summary>Pulls 16x16 shell icons for folder paths and converts them to WPF image sources.</summary>
+    /// <summary>
+    /// Pulls 16x16 shell icons and converts them to frozen WPF image sources. Real shell icon
+    /// extraction touches the target's volume, so it happens synchronously only for paths on local
+    /// fixed drives; anything else (UNC shares, removable media, unprobed targets) gets an instant
+    /// extension/generic icon and the real one is fetched on the background worker, which triggers a
+    /// coalesced re-render when it lands. The cache is shared by every sidebar and is thread-safe
+    /// because the worker fills it too.
+    /// </summary>
     internal static class IconHelper
     {
+        private static readonly object Gate = new object();
         private static readonly Dictionary<string, ImageSource> Cache =
             new Dictionary<string, ImageSource>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, bool> FastRoots =
+            new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        private static readonly HashSet<string> Pending = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private const int MaxCache = 600;
         private static ImageSource _genericFolder;
 
         public static ImageSource GetIcon(string path, bool exists, bool isFile)
@@ -75,32 +87,91 @@ namespace QuickPane.UI
                 if (string.IsNullOrEmpty(path)) return GenericFolder();
 
                 string key = (isFile ? "f:" : "d:") + path;
-                ImageSource cached;
-                if (Cache.TryGetValue(key, out cached)) return cached;
+                lock (Gate)
+                {
+                    ImageSource cached;
+                    if (Cache.TryGetValue(key, out cached)) return cached;
+                }
 
-                ImageSource img;
-                if (exists)
+                if (!exists)
                 {
-                    img = Extract(path, useAttributes: false);
+                    // Broken target: icon by extension for files, plain folder otherwise. No disk hit.
+                    return isFile ? ExtensionIcon(path) : GenericFolder();
                 }
-                else if (isFile)
+
+                if (IsFastPath(path))
                 {
-                    // Generic icon by extension when the file is gone.
-                    img = Extract(path, useAttributes: true, fileAttr: 0x80 /* FILE_ATTRIBUTE_NORMAL */);
+                    var img = Extract(path, useAttributes: false);
+                    if (img == null) img = isFile ? ExtensionIcon(path) : GenericFolder();
+                    if (img != null) Put(key, img);
+                    return img;
                 }
-                else
-                {
-                    img = GenericFolder();
-                }
-                if (img == null) img = isFile ? null : GenericFolder();
-                if (img != null) Cache[key] = img;
-                return img;
+
+                // Slow volume: render an instant placeholder and swap in the real icon later.
+                QueueSlowExtract(key, path);
+                return isFile ? ExtensionIcon(path) : GenericFolder();
             }
             catch (Exception ex)
             {
                 Log.Error("GetIcon failed for '" + path + "'", ex);
                 return isFile ? null : GenericFolder();
             }
+        }
+
+        private static void Put(string key, ImageSource img)
+        {
+            lock (Gate)
+            {
+                if (Cache.Count > MaxCache) Cache.Clear(); // crude but keeps growth bounded
+                Cache[key] = img;
+            }
+        }
+
+        private static void QueueSlowExtract(string key, string path)
+        {
+            lock (Gate) { if (!Pending.Add(key)) return; }
+            WorkQueue.Post(() =>
+            {
+                ImageSource img = null;
+                try
+                {
+                    // Only touch the volume once the probe confirmed it answers; if the probe has
+                    // not finished yet, the next re-render after it fires queues this again.
+                    if (PathStatus.ConfirmedAlive(path)) img = Extract(path, useAttributes: false);
+                }
+                catch (Exception ex) { Log.Error("slow icon extract '" + path + "'", ex); }
+                lock (Gate) { Pending.Remove(key); }
+                if (img != null)
+                {
+                    Put(key, img);
+                    PathStatus.NotifyVisualRefresh();
+                }
+            });
+        }
+
+        // Fixed local drives answer icon queries in microseconds; everything else can block.
+        private static bool IsFastPath(string path)
+        {
+            try
+            {
+                if (path.StartsWith("\\\\", StringComparison.Ordinal)) return false;
+                var root = System.IO.Path.GetPathRoot(path);
+                if (string.IsNullOrEmpty(root)) return false;
+                lock (Gate)
+                {
+                    bool fast;
+                    if (FastRoots.TryGetValue(root, out fast)) return fast;
+                }
+                bool result = new System.IO.DriveInfo(root).DriveType == System.IO.DriveType.Fixed;
+                lock (Gate) { FastRoots[root] = result; }
+                return result;
+            }
+            catch { return false; }
+        }
+
+        private static ImageSource ExtensionIcon(string path)
+        {
+            return Extract(path, useAttributes: true, fileAttr: 0x80 /* FILE_ATTRIBUTE_NORMAL */);
         }
 
         public static ImageSource GetFolderIcon(string path, bool exists)
@@ -138,9 +209,12 @@ namespace QuickPane.UI
 
         private static ImageSource GenericFolder()
         {
-            if (_genericFolder == null)
-                _genericFolder = Extract("folder", useAttributes: true);
-            return _genericFolder;
+            lock (Gate)
+            {
+                if (_genericFolder == null)
+                    _genericFolder = Extract("folder", useAttributes: true);
+                return _genericFolder;
+            }
         }
 
         private static ImageSource Extract(string path, bool useAttributes, uint fileAttr = NM.FILE_ATTRIBUTE_DIRECTORY)

@@ -48,6 +48,27 @@ namespace QuickPane
             Log.Init();
             Log.Info("QuickPane starting. args=[" + string.Join(" ", e.Args) + "]");
 
+            // Last-resort exception logging. Without these, any unhandled exception killed the
+            // process with nothing in debug.log, which is why crashes were invisible. Dispatcher
+            // exceptions are logged and swallowed so one bad event handler cannot take down every
+            // embedded pane; appdomain/task exceptions are at least recorded before the CLR acts.
+            DispatcherUnhandledException += (s, a) =>
+            {
+                Log.Error("Unhandled dispatcher exception", a.Exception);
+                a.Handled = true;
+            };
+            AppDomain.CurrentDomain.UnhandledException += (s, a) =>
+            {
+                var ex2 = a.ExceptionObject as Exception;
+                Log.Error("Unhandled appdomain exception" + (a.IsTerminating ? " (terminating)" : ""),
+                    ex2 ?? new Exception(a.ExceptionObject != null ? a.ExceptionObject.ToString() : "unknown"));
+            };
+            System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (s, a) =>
+            {
+                Log.Error("Unobserved task exception", a.Exception);
+                a.SetObserved();
+            };
+
             try
             {
                 if (e.Args.Length >= 2 && string.Equals(e.Args[0], PinVerb, StringComparison.OrdinalIgnoreCase))
@@ -86,10 +107,22 @@ namespace QuickPane
             Groups = new GroupStore(Settings);
             Groups.Start();          // initial scan + FileSystemWatcher on the groups folder
 
-            // If the groups path or mode changes in settings, react.
+            // If the groups path or mode changes in settings, react. Reload groups only when the
+            // groups folder actually changed: reloading on every save also ran on width release and
+            // section renames, re-creating the FileSystemWatcher and rescanning for nothing.
+            string lastGroupsPath = Settings.ExpandedGroupsPath;
             Settings.Changed += (s, e) =>
             {
-                try { Groups.Reload(); } catch (Exception ex) { Log.Error("groups reload", ex); }
+                try
+                {
+                    var p = Settings.ExpandedGroupsPath;
+                    if (!string.Equals(p, lastGroupsPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        lastGroupsPath = p;
+                        Groups.Reload();
+                    }
+                }
+                catch (Exception ex) { Log.Error("groups reload", ex); }
                 // Defer the host switch so we never tear down a window from inside its own event.
                 Dispatcher.BeginInvoke(new Action(() => { try { ApplyHosts(); } catch (Exception ex) { Log.Error("apply hosts", ex); } }));
             };

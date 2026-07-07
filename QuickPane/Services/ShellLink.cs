@@ -40,7 +40,7 @@ namespace QuickPane.Services
                 IPersistFile file = (IPersistFile)link;
                 file.Load(linkPath, 0);
                 // No SLR_UPDATE so a missing target does not block resolution or pop UI.
-                var sb = new StringBuilder(260);
+                var sb = new StringBuilder(1024); // room for long paths beyond MAX_PATH
                 var data = new WIN32_FIND_DATAW();
                 link.GetPath(sb, sb.Capacity, ref data, SLGP_RAWPATH);
                 if (sb.Length > 0) return sb.ToString();
@@ -53,7 +53,7 @@ namespace QuickPane.Services
                 {
                     try
                     {
-                        var sb2 = new StringBuilder(260);
+                        var sb2 = new StringBuilder(1024);
                         if (SHGetPathFromIDListW(pidl, sb2) && sb2.Length > 0) return sb2.ToString();
                     }
                     finally { ILFree(pidl); }

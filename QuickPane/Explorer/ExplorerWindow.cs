@@ -119,7 +119,7 @@ namespace QuickPane.Explorer
         {
             App.Recents?.RecordNavigation(path);
             if (_navOverride != null) _navOverride(path);
-            else ExplorerNavigator.Navigate(_cabinet, path);
+            else ExplorerNavigator.NavigateAsync(_cabinet, path); // never block the input-attached UI thread
         }
 
         private void OnSettingsChanged(object sender, EventArgs e)

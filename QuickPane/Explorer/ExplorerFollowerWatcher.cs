@@ -217,7 +217,7 @@ namespace QuickPane.Explorer
         {
             App.Recents?.RecordNavigation(path);
             if (_navOverride != null) _navOverride(path);
-            else ExplorerNavigator.Navigate(_cab, path);
+            else ExplorerNavigator.NavigateAsync(_cab, path); // COM navigation stays off the UI thread
         }
 
         public void PositionBeside(NM.RECT visible, int widthPx)

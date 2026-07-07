@@ -262,14 +262,18 @@ namespace QuickPane.Explorer
         {
             App.Recents?.RecordNavigation(path);
             // If an Explorer window is open, change its location; otherwise open a new one. After the
-            // new window opens it becomes the active Explorer, so the next click navigates it.
-            if (_lastExplorer != IntPtr.Zero && NM.IsWindow(_lastExplorer) &&
-                ExplorerNavigator.Navigate(_lastExplorer, path))
+            // new window opens it becomes the active Explorer, so the next click navigates it. The
+            // COM navigation runs on the worker because it blocks for as long as Explorer is busy.
+            var last = _lastExplorer;
+            WorkQueue.Post(() =>
             {
-                NM.SetForegroundWindow(_lastExplorer); // bring the navigated window to the front
-                return;
-            }
-            ExplorerNavigator.OpenNewWindow(path);
+                if (last != IntPtr.Zero && NM.IsWindow(last) && ExplorerNavigator.Navigate(last, path))
+                {
+                    NM.SetForegroundWindow(last); // bring the navigated window to the front
+                    return;
+                }
+                ExplorerNavigator.OpenNewWindow(path);
+            });
         }
 
         private void RemoveAppBar()

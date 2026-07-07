@@ -27,10 +27,50 @@ namespace QuickPane.Services
         }
     }
 
-    /// <summary>Snapshots fixed, removable, and network drives for the Computer section.</summary>
+    /// <summary>
+    /// Snapshots fixed, removable, and network drives for the Computer section. IsReady, volume
+    /// labels, and sizes are queried in full only on the background worker: a mapped network drive
+    /// whose server is gone blocks those calls for many seconds, and this used to run on the UI
+    /// thread on every pane rebuild. The synchronous path returns the cached snapshot (details for
+    /// fixed local drives only on the very first call) and kicks a refresh.
+    /// </summary>
     public sealed class DriveService
     {
+        /// <summary>Raised on the UI thread when a background refresh replaced the snapshot.</summary>
+        public event Action Refreshed;
+
+        private volatile List<DriveItem> _cache;
+        private int _refreshing;
+
         public List<DriveItem> GetDrives()
+        {
+            var c = _cache;
+            if (c == null)
+            {
+                c = Snapshot(fullDetail: false); // fixed drives only; instant
+                _cache = c;
+                RefreshAsync();
+            }
+            return c;
+        }
+
+        /// <summary>Re-query everything (including slow volumes) on the worker.</summary>
+        public void RefreshAsync()
+        {
+            if (System.Threading.Interlocked.Exchange(ref _refreshing, 1) == 1) return;
+            WorkQueue.Post(() =>
+            {
+                try
+                {
+                    var list = Snapshot(fullDetail: true);
+                    _cache = list;
+                    WorkQueue.PostUI(() => { Refreshed?.Invoke(); });
+                }
+                finally { System.Threading.Interlocked.Exchange(ref _refreshing, 0); }
+            });
+        }
+
+        private static List<DriveItem> Snapshot(bool fullDetail)
         {
             var list = new List<DriveItem>();
             DriveInfo[] drives;
@@ -51,12 +91,15 @@ namespace QuickPane.Services
                         Letter = d.Name.TrimEnd('\\'),
                         RootPath = d.Name,
                         IsNetwork = d.DriveType == DriveType.Network,
-                        IsRemovable = d.DriveType == DriveType.Removable,
-                        Ready = d.IsReady
+                        IsRemovable = d.DriveType == DriveType.Removable
                     };
 
-                    if (d.IsReady)
+                    // IsReady / labels / sizes can block on non-fixed volumes, so the quick pass
+                    // leaves them at optimistic defaults and the worker fills them in.
+                    bool queryDetail = fullDetail || d.DriveType == DriveType.Fixed;
+                    if (queryDetail && d.IsReady)
                     {
+                        item.Ready = true;
                         item.Label = string.IsNullOrWhiteSpace(d.VolumeLabel)
                             ? DefaultLabel(d.DriveType)
                             : d.VolumeLabel;
@@ -65,6 +108,7 @@ namespace QuickPane.Services
                     }
                     else
                     {
+                        item.Ready = !queryDetail; // assume alive until the worker says otherwise
                         item.Label = DefaultLabel(d.DriveType);
                     }
 

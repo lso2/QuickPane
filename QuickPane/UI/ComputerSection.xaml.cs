@@ -54,6 +54,7 @@ namespace QuickPane.UI
             if (_subscribed) return;
             _subscribed = true;
             ExplorerWatcher.DrivesChanged += OnDrivesChanged;
+            if (App.Drives != null) App.Drives.Refreshed += OnDrivesRefreshed;
         }
 
         private void Unsubscribe()
@@ -61,15 +62,19 @@ namespace QuickPane.UI
             if (!_subscribed) return;
             _subscribed = false;
             ExplorerWatcher.DrivesChanged -= OnDrivesChanged;
+            if (App.Drives != null) App.Drives.Refreshed -= OnDrivesRefreshed;
         }
 
+        // Device arrival/removal: requery on the worker; the Refreshed event repaints when done.
         private void OnDrivesChanged()
         {
-            Dispatcher.BeginInvoke(new Action(() =>
-            {
-                if (_items == null) return;
-                PopulateDrives();
-            }));
+            App.Drives?.RefreshAsync();
+        }
+
+        // Raised on the UI thread after the background snapshot replaced the cache.
+        private void OnDrivesRefreshed()
+        {
+            if (_items != null) PopulateDrives();
         }
 
         private void PopulateDrives()
