@@ -2,7 +2,7 @@
 
 All notable changes to QuickPane are recorded here. The major number marks a structural shift, the minor number marks a feature set, and the patch number marks fixes. The newest release is listed first.
 
-## [3.3.0] - 2026-07-06
+## [3.4.1] - 2026-07-06
 
 ### Fixed
 - System-wide input lag while navigating. Everything that can touch a slow disk, the network, or cross-process COM now runs on one background worker (`WorkQueue`) instead of the UI thread, which shares Explorer's input queue in Inside mode, so a dead network target or a busy Explorer can no longer freeze input across the desktop while CPU sits idle. This covers shortcut resolution, Shell.Application navigation and path queries, the Windows Recent scan, drive detail queries, existence probes, shell file operations from drops, and slow icon extraction.
