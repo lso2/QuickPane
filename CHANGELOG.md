@@ -2,6 +2,14 @@
 
 All notable changes to QuickPane are recorded here. The major number marks a structural shift, the minor number marks a feature set, and the patch number marks fixes. The newest release is listed first.
 
+## [3.5.1] - 2026-07-11
+
+### Fixed
+- Groups could not be reordered within a profile's own list on the settings page, in either the tray window or the sidebar's embedded copy. Dragging a group's grip picked it up and showed a valid drop cursor, but dropping it back into the same list did nothing, because the drop handler only ever moved a group to a different profile column and silently ignored a same-profile drop. Each group row now accepts the drop itself and reorders in place; moving a group to another profile column is unchanged.
+
+### Changed
+- The sidebar's gear button now opens the same Settings window the tray icon opens, instead of sliding a second, cramped copy of the settings UI into the sidebar itself. The compact single-column settings layout introduced in 3.1.0 for that embedded copy is removed along with it, since nothing uses it anymore.
+
 ## [3.4.1] - 2026-07-06
 
 ### Fixed
