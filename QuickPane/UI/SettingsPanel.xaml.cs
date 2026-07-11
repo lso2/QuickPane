@@ -23,10 +23,6 @@ namespace QuickPane.UI
         private bool _maybeDrag;
         private const string ProfileGroupFormat = "QpProfileGroup";
 
-        /// <summary>True when hosted in the narrow embedded pane: stack everything in one column instead
-        /// of the wide multi-column layout used in the tray settings window.</summary>
-        public bool Compact { get; set; }
-
         public SettingsPanel()
         {
             InitializeComponent();
@@ -71,43 +67,27 @@ namespace QuickPane.UI
             title.Children.Add(close);
             Host.Children.Add(title);
 
-            if (Compact)
-            {
-                // Narrow pane: everything stacked in one column.
-                Host.Children.Add(PaneModeBlock(s));
-                Host.Children.Add(DockBlock(s));
-                Host.Children.Add(SectionsBlock(s));
-                Host.Children.Add(ProfileTabsBlock(s));
-                Host.Children.Add(SubHeading("Groups"));
-                var col = new StackPanel();
-                for (int i = 0; i < s.Profiles.Count; i++) col.Children.Add(BuildProfileColumn(i));
-                col.Children.Add(BuildAddProfileColumn());
-                Host.Children.Add(col);
-            }
-            else
-            {
-                // Wide window: three global blocks across the top, profiles as horizontal cards.
-                var globals = new Grid { Margin = new Thickness(0, 0, 0, 6) };
-                for (int i = 0; i < 3; i++) globals.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                AddCol(globals, 0, PaneModeBlock(s));
-                AddCol(globals, 1, DockBlock(s));
-                AddCol(globals, 2, SectionsBlock(s));
-                Host.Children.Add(globals);
+            // Three global blocks across the top, profiles as horizontal cards.
+            var globals = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+            for (int i = 0; i < 3; i++) globals.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            AddCol(globals, 0, PaneModeBlock(s));
+            AddCol(globals, 1, DockBlock(s));
+            AddCol(globals, 2, SectionsBlock(s));
+            Host.Children.Add(globals);
 
-                Host.Children.Add(ProfileTabsBlock(s));
-                Host.Children.Add(SubHeading("Groups"));
-                var scroller = new ScrollViewer
-                {
-                    HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                    VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                    Margin = new Thickness(0, 0, 0, 6)
-                };
-                var row = new StackPanel { Orientation = Orientation.Horizontal };
-                for (int i = 0; i < s.Profiles.Count; i++) row.Children.Add(BuildProfileColumn(i));
-                row.Children.Add(BuildAddProfileColumn());
-                scroller.Content = row;
-                Host.Children.Add(scroller);
-            }
+            Host.Children.Add(ProfileTabsBlock(s));
+            Host.Children.Add(SubHeading("Groups"));
+            var scroller = new ScrollViewer
+            {
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            var row = new StackPanel { Orientation = Orientation.Horizontal };
+            for (int i = 0; i < s.Profiles.Count; i++) row.Children.Add(BuildProfileColumn(i));
+            row.Children.Add(BuildAddProfileColumn());
+            scroller.Content = row;
+            Host.Children.Add(scroller);
 
             Host.Children.Add(BackupBlock());
             Host.Children.Add(BuildSupportButton());
@@ -225,9 +205,9 @@ namespace QuickPane.UI
 
             var border = new Border
             {
-                Width = Compact ? double.NaN : 250,
-                HorizontalAlignment = Compact ? HorizontalAlignment.Stretch : HorizontalAlignment.Left,
-                Margin = Compact ? new Thickness(0, 0, 0, 8) : new Thickness(0, 0, 10, 0),
+                Width = 250,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 0, 10, 0),
                 Padding = new Thickness(8),
                 Background = CardBrush(),
                 BorderBrush = active ? UiHelpers.AppBrush("AccentBrush") : UiHelpers.AppBrush("SeparatorColor"),
@@ -393,7 +373,53 @@ namespace QuickPane.UI
                 catch (Exception ex) { Log.Error("profile group drag", ex); }
             };
 
+            WireGroupRowDrop(grid, profileIndex, folder);
+
             return grid;
+        }
+
+        // A row also accepts the drop directly rather than only the card behind it, because the card's
+        // OnProfileDrop treats a same-profile drop as a no-op (there is nothing to move, only reorder),
+        // which is why dragging a group's grip to another spot in the same list used to do nothing.
+        private void WireGroupRowDrop(FrameworkElement row, int profileIndex, string folder)
+        {
+            row.AllowDrop = true;
+            row.DragOver += (s, e) =>
+            {
+                bool ok = e.Data.GetDataPresent(ProfileGroupFormat);
+                bool copy = (e.KeyStates & DragDropKeyStates.ControlKey) != 0;
+                e.Effects = ok ? (copy ? DragDropEffects.Copy : DragDropEffects.Move) : DragDropEffects.None;
+                e.Handled = true;
+            };
+            row.Drop += (s, e) =>
+            {
+                e.Handled = true;
+                if (!e.Data.GetDataPresent(ProfileGroupFormat)) return;
+                var dragged = e.Data.GetData(ProfileGroupFormat) as string;
+                if (string.IsNullOrEmpty(dragged) || string.Equals(dragged, folder, StringComparison.OrdinalIgnoreCase)) return;
+
+                string destRoot = _settings.ExpandedGroupsPathFor(_settings.Current.Profiles[profileIndex]);
+                string srcRoot = System.IO.Path.GetDirectoryName(dragged);
+                bool copy = (e.KeyStates & DragDropKeyStates.ControlKey) != 0;
+
+                if (!copy && string.Equals(srcRoot, destRoot.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                {
+                    // Same profile, not copying: reorder relative to whichever row it landed on.
+                    bool below = e.GetPosition(row).Y > row.ActualHeight / 2;
+                    var ordered = GroupStore.ListGroups(destRoot).Select(t => t.Item1).ToList();
+                    ordered.RemoveAll(f => string.Equals(f, dragged, StringComparison.OrdinalIgnoreCase));
+                    int idx = ordered.FindIndex(f => string.Equals(f, folder, StringComparison.OrdinalIgnoreCase));
+                    if (idx < 0) idx = ordered.Count - 1;
+                    ordered.Insert(below ? idx + 1 : idx, dragged);
+                    GroupStore.ReorderGroupFolders(destRoot, ordered);
+                    ReloadIfActive(profileIndex);
+                    BuildUI();
+                }
+                else
+                {
+                    OnProfileDrop(profileIndex, e); // different profile, or Ctrl-copy: unchanged move/copy
+                }
+            };
         }
 
         private void OnProfileDrop(int destProfileIndex, DragEventArgs e)
@@ -422,9 +448,9 @@ namespace QuickPane.UI
         {
             var border = new Border
             {
-                Width = Compact ? double.NaN : 150,
-                HorizontalAlignment = Compact ? HorizontalAlignment.Stretch : HorizontalAlignment.Left,
-                Margin = Compact ? new Thickness(0, 0, 0, 8) : new Thickness(0, 0, 10, 0),
+                Width = 150,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 0, 10, 0),
                 Padding = new Thickness(8),
                 Background = CardBrush(),
                 BorderBrush = UiHelpers.AppBrush("SeparatorColor"),

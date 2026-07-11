@@ -248,6 +248,14 @@ namespace QuickPane
             return Drawing.SystemIcons.Application;
         }
 
+        /// <summary>Open (or activate) the real Settings window from anywhere in the app, e.g. the
+        /// sidebar's own gear button, rather than embedding a second copy of the settings UI in place.</summary>
+        public static void ShowSettings()
+        {
+            var app = Application.Current as App;
+            if (app != null) app.ShowSettingsWindow();
+        }
+
         private void ShowSettingsWindow()
         {
             if (_settingsWindow != null)

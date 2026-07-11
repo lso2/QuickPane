@@ -9,6 +9,8 @@
 
 A folder sidebar for Windows File Explorer. QuickPane embeds a pinned-folders pane inside every Explorer window, so your groups, recent locations, drives, network shares, and WSL distros travel with the window you are already using. Pin it inside the window, float it beside the window, or run it as a slim screen-edge dock. Everything runs locally as a single tray app, no code is ever injected into Explorer, and all data stays in plain files under your user profile.
 
+![QuickPane embedded inside a File Explorer window, showing pinned folder groups with tabs](screens/quickpane-demo.jpg)
+
 ## Summary
 
 QuickPane puts your folders one click away inside Explorer itself, with:
@@ -53,6 +55,8 @@ The pane is a stack of sections you can show, hide, reorder, and rename:
 - **Recent**: folders browsed directly in Explorer, captured through window activation, title changes, and a light periodic check, with a location-URL fallback when the shell returns nothing, and a configurable count from 5 to 50
 - **This PC**: drives that expand in place, with folder subtrees that enumerate lazily like the native Explorer tree
 - **Network** and **Linux (WSL)**: each its own section with a proper icon and a visibility toggle
+
+![The pane showing This PC, Network, and a Linux (WSL) distro browsed like a local drive](screens/quickpane-demo-2.jpg)
 
 ### Native file drag
 
@@ -125,6 +129,12 @@ git clone https://github.com/lso2/QuickPane.git
 3. The single-file `QuickPaneSetup.exe` is produced in the output folder
 
 > The installer's `[Files]` source points at the `Release\x64` output. If you build `Debug`, change `Release` to `Debug` in `Installer.iss`.
+
+### Recommended: hide Explorer's own navigation pane
+
+QuickPane sits alongside Windows' built-in navigation pane rather than replacing it, so the two will show side by side until you turn the native one off. In any Explorer window, open the **View** tab, click **Navigation pane**, and uncheck **Navigation pane** so QuickPane is the only tree on the left.
+
+![Explorer's View ribbon with the Navigation pane toggle open](screens/hide-nav-pane-windows.jpg)
 
 ## Usage
 
@@ -252,6 +262,7 @@ QuickPane/
 ├── QuickPane.sln              # Visual Studio solution
 ├── Installer.iss              # Inno Setup installer script
 ├── CHANGELOG.md               # Version history
+├── screens/                   # Screenshots used in this README
 └── QuickPane/
     ├── QuickPane.csproj       # Project (.NET Framework 4.8, x64, WPF)
     ├── app.manifest           # Per-monitor DPI, runs without elevation

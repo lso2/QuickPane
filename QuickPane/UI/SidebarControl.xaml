@@ -103,14 +103,6 @@
                     </Button.Style>
                 </Button>
 
-                <!-- Settings slide-in host -->
-                <Border Grid.Row="0" Grid.RowSpan="2" x:Name="SettingsHost"
-                        Background="{DynamicResource SidebarBackground}" Visibility="Collapsed">
-                    <Border.RenderTransform>
-                        <TranslateTransform x:Name="SettingsSlide" X="400" />
-                    </Border.RenderTransform>
-                </Border>
-
                 <!-- Resize grip, drag to set sidebar width -->
                 <Thumb Grid.Row="0" Grid.RowSpan="2" x:Name="ResizeThumb" Width="6"
                        HorizontalAlignment="Right" Cursor="SizeWE"

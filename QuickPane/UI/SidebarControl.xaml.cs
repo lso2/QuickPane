@@ -13,9 +13,9 @@ using QuickPane.Services;
 namespace QuickPane.UI
 {
     /// <summary>
-    /// Root of the embedded sidebar. Builds the three sections in the order from settings, hosts the
-    /// settings slide-in, and rebuilds when groups, recents, theme, or settings change. One instance
-    /// lives per Explorer window.
+    /// Root of the embedded sidebar. Builds the three sections in the order from settings, opens the
+    /// real Settings window from its gear button, and rebuilds when groups, recents, theme, or settings
+    /// change. One instance lives per Explorer window.
     /// </summary>
     public partial class SidebarControl : UserControl
     {
@@ -198,23 +198,13 @@ namespace QuickPane.UI
             }
         }
 
-        // ---- settings slide-in ----------------------------------------------
+        // ---- settings ----------------------------------------------
 
+        // Opens the real Settings window instead of embedding a second, cramped copy of the settings
+        // UI in the sidebar itself, so there is exactly one settings surface to keep in sync.
         private void OnGearClick(object sender, RoutedEventArgs e)
         {
-            var panel = new SettingsPanel();
-            panel.Compact = true; // narrow embedded pane: stack everything vertically
-            panel.Bind(App.Settings, App.Groups);
-            panel.CloseRequested += (s2, e2) => HideSettings();
-            SettingsHost.Child = panel;
-
-            double w = ActualWidth > 0 ? ActualWidth : 220;
-            SettingsSlide.X = w;
-            SettingsHost.Visibility = Visibility.Visible;
-
-            var anim = new DoubleAnimation(w, 0, TimeSpan.FromMilliseconds(200))
-            { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
-            SettingsSlide.BeginAnimation(TranslateTransform.XProperty, anim);
+            App.ShowSettings();
         }
 
         // Slow the wheel to roughly match Explorer's nav pane, which scrolled about half as fast.
@@ -349,19 +339,6 @@ namespace QuickPane.UI
         private void OnResizeCompleted(object sender, DragCompletedEventArgs e)
         {
             if (App.Settings != null) App.Settings.Save(); // persist the final width
-        }
-
-        private void HideSettings()
-        {
-            double w = ActualWidth > 0 ? ActualWidth : 220;
-            var anim = new DoubleAnimation(0, w, TimeSpan.FromMilliseconds(180))
-            { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn } };
-            anim.Completed += (s, e) =>
-            {
-                SettingsHost.Visibility = Visibility.Collapsed;
-                SettingsHost.Child = null;
-            };
-            SettingsSlide.BeginAnimation(TranslateTransform.XProperty, anim);
         }
     }
 

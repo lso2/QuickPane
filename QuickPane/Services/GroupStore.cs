@@ -712,6 +712,26 @@ namespace QuickPane.Services
             catch (Exception ex) { Log.Error("CopyGroupFolder failed", ex); }
         }
 
+        /// <summary>Reorder the group folders under one profile's expanded root (drag-to-reorder within a
+        /// profile's own group list in the settings page). Static and root-based like the other
+        /// cross-profile helpers above, so it works on any profile column, active or not.</summary>
+        public static void ReorderGroupFolders(string expandedRoot, List<string> orderedFolders)
+        {
+            try
+            {
+                var plan = new List<Tuple<string, string, string>>();
+                for (int i = 0; i < orderedFolders.Count; i++)
+                {
+                    int o; string name; Split(Path.GetFileName(orderedFolders[i]), out o, out name);
+                    plan.Add(Tuple.Create(orderedFolders[i],
+                        Path.Combine(expandedRoot, "~ord~" + Guid.NewGuid().ToString("N")),
+                        Path.Combine(expandedRoot, (i + 1).ToString("00") + "_" + name)));
+                }
+                TwoPhaseRename(plan, isDir: true);
+            }
+            catch (Exception ex) { Log.Error("ReorderGroupFolders failed", ex); }
+        }
+
         private static int NextOrderInRoot(string root)
         {
             int max = 0;
