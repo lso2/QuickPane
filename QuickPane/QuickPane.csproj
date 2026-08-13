@@ -77,6 +77,10 @@
     <Compile Include="Interop\VirtualDesktop.cs" />
     <Compile Include="Models\Models.cs" />
     <Compile Include="Services\Log.cs" />
+    <Compile Include="Services\CrashGuard.cs" />
+    <Compile Include="Services\Watchdog.cs" />
+    <Compile Include="Services\ShortcutRepair.cs" />
+    <Compile Include="Services\ShutdownSignal.cs" />
     <Compile Include="Services\WorkQueue.cs" />
     <Compile Include="Services\PathStatus.cs" />
     <Compile Include="Services\SettingsStore.cs" />
@@ -85,11 +89,13 @@
     <Compile Include="Services\DriveService.cs" />
     <Compile Include="Services\ThemeService.cs" />
     <Compile Include="Services\ShellLink.cs" />
+    <Compile Include="Services\SshfsService.cs" />
     <Compile Include="Services\FileDropOps.cs" />
     <Compile Include="Services\UiState.cs" />
     <Compile Include="UI\TextPrompt.cs" />
     <Compile Include="UI\FolderTreeNode.cs" />
     <Compile Include="UI\ShellRootSection.cs" />
+    <Compile Include="UI\SshSection.cs" />
     <Compile Include="UI\DropLineAdorner.cs" />
     <Compile Include="UI\DragGhostAdorner.cs" />
     <Compile Include="Services\KnownFolders.cs" />

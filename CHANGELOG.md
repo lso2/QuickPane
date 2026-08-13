@@ -1,6 +1,18 @@
 # Changelog
 
-All notable changes to QuickPane are recorded here. The major number marks a structural shift, the minor number marks a feature set, and the patch number marks fixes. The newest release is listed first.
+## [3.7.0] - 2026-08-13
+
+### Added
+- Crash detection with automatic restart, capped at three restarts in ten minutes.
+- Start menu shortcut, an optional desktop shortcut, and a "Create desktop shortcut" tray item.
+- Troubleshooting submenu in the tray menu, with "Open log folder" and "Restart QuickPane".
+- `events.log`, a journal of crashes, restarts, and dialog problems that accumulates across sessions in `%APPDATA%\QuickPane\Logs`.
+- Background thread and unobserved task exceptions are recorded.
+
+### Fixed
+- Closing QuickPane from the tray menu counted as a crash.
+- Save As navigation could report success when the dialog had not moved.
+- Clicking a folder did nothing in a Save or Open dialog that exposes no address bar.
 
 ## [3.5.1] - 2026-07-11
 

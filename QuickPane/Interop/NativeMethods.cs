@@ -66,6 +66,19 @@ namespace QuickPane.Interop
         public const uint SMTO_NORMAL = 0x0000;
         public const uint SMTO_ABORTIFHUNG = 0x0002;
 
+        // Reading a control's text back after writing it turns a silent misfire into something the
+        // journal can name. WM_GETTEXT is a system-defined message, so USER32 marshals the buffer for
+        // standard control classes and the call works across processes.
+        [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern IntPtr SendMessageTimeoutBuffer(IntPtr hWnd, int Msg, IntPtr wParam,
+            StringBuilder lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
+
+        [DllImport("user32.dll")]
+        public static extern bool IsWindowEnabled(IntPtr hWnd);
+
+        public const int WM_GETTEXT = 0x000D;
+        public const int WM_GETTEXTLENGTH = 0x000E;
+
         public const int WM_SETTEXT = 0x000C;
         public const int WM_COMMAND = 0x0111;
         public const int BM_CLICK = 0x00F5;

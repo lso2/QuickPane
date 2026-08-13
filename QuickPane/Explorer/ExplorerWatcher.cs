@@ -237,8 +237,11 @@ namespace QuickPane.Explorer
         /// leak an ExplorerWindow (HwndSource + settings-event subscriptions) for the session.</summary>
         public void Rescan()
         {
+            // Iterate a snapshot. ApplyLayout drives windows in explorer.exe, and a destroy event that
+            // lands mid-pass removes an entry, so walking the live dictionary would throw partway
+            // through and leave the remaining windows unlaid.
             List<IntPtr> dead = null;
-            foreach (var kv in _windows)
+            foreach (var kv in new List<KeyValuePair<IntPtr, ExplorerWindow>>(_windows))
             {
                 if (NM.IsWindow(kv.Key)) kv.Value.ApplyLayout();
                 else (dead ?? (dead = new List<IntPtr>())).Add(kv.Key);
@@ -247,7 +250,8 @@ namespace QuickPane.Explorer
             {
                 foreach (var hwnd in dead)
                 {
-                    var win = _windows[hwnd];
+                    ExplorerWindow win;
+                    if (!_windows.TryGetValue(hwnd, out win)) continue;
                     _windows.Remove(hwnd);
                     TrackAttached(win, false);
                     try { win.Dispose(); } catch (Exception ex) { Log.Error("prune dispose", ex); }

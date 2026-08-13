@@ -31,6 +31,33 @@ namespace QuickPane.Services
             }
         }
 
+        /// <summary>Create a shortcut to an executable, with its own icon and the executable's folder as
+        /// the working directory. Kept apart from Create because that one targets folders for pins and
+        /// sets no icon, whereas a launcher needs both.</summary>
+        public static void CreateAppShortcut(string linkPath, string exePath, string description)
+        {
+            IShellLinkW link = (IShellLinkW)new CShellLink();
+            try
+            {
+                link.SetPath(exePath);
+                var dir = System.IO.Path.GetDirectoryName(exePath);
+                if (!string.IsNullOrEmpty(dir)) link.SetWorkingDirectory(dir);
+                if (!string.IsNullOrEmpty(description)) link.SetDescription(description);
+                link.SetIconLocation(exePath, 0);
+                link.SetShowCmd(1); // SW_SHOWNORMAL
+
+                var dest = System.IO.Path.GetDirectoryName(linkPath);
+                if (!string.IsNullOrEmpty(dest)) System.IO.Directory.CreateDirectory(dest);
+
+                IPersistFile file = (IPersistFile)link;
+                file.Save(linkPath, false);
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(link);
+            }
+        }
+
         /// <summary>Resolve the target of a .lnk. Returns null if it cannot be read.</summary>
         public static string ResolveTarget(string linkPath)
         {

@@ -2,14 +2,15 @@
 ;
 ; This produces a single QuickPaneSetup.exe. Because QuickPane is a user-mode app that only writes
 ; HKCU keys, the installer runs without administrator rights (PrivilegesRequired=lowest). It installs
-; the executable, registers the "Pin to Quick Pane" folder verb, adds a startup entry, and launches
-; the app. Uninstall preserves the user's groups and settings under %APPDATA%\QuickPane.
+; the executable, creates a Start menu shortcut and an optional desktop shortcut, registers the
+; "Pin to Quick Pane" folder verb, adds a startup entry, and launches the app. Uninstall preserves the
+; user's groups and settings under %APPDATA%\QuickPane.
 ;
 ; To build: open this file in Inno Setup, then press Compile. Build QuickPane.sln in Visual Studio
 ; first so QuickPane.exe exists at the path in [Files].
 
 #define MyAppName "QuickPane"
-#define MyAppVersion "3.5.1"
+#define MyAppVersion "3.7.0"
 #define MyAppPublisher "PlexPixel"
 #define MyAppExe "QuickPane.exe"
 
@@ -34,9 +35,20 @@ RestartApplications=no
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[Tasks]
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+
 [Files]
 ; Build Release|x64 first so this path exists.
 Source: "QuickPane\bin\x64\Release\{#MyAppExe}"; DestDir: "{app}"; Flags: ignoreversion
+
+[Icons]
+; QuickPane spends its life in the tray, so without a launcher here the only way back in after the app
+; is closed is to run the installer again. The Start menu entry goes straight into {userprograms}
+; rather than a program group, which is the same path the app repairs at every start, so the installer
+; and the app maintain one shortcut between them instead of two competing ones.
+Name: "{userprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Comment: "QuickPane sidebar for File Explorer"
+Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Comment: "QuickPane sidebar for File Explorer"; Tasks: desktopicon
 
 [Registry]
 ; "Pin to Quick Pane" on any folder.
@@ -58,5 +70,21 @@ Name: "{userappdata}\QuickPane\Groups"
 Filename: "{app}\{#MyAppExe}"; Description: "Launch QuickPane"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-; Stop the app before files are removed so Explorer windows are restored cleanly.
-Filename: "{cmd}"; Parameters: "/c taskkill /im {#MyAppExe} /f"; Flags: runhidden; RunOnceId: "StopQuickPane"
+; Ask the app to close rather than killing it. A force kill reads as a crash to the watchdog, which
+; answers by relaunching QuickPane in the middle of the uninstall, and it also skips the teardown that
+; restores every Explorer window's layout. The verb blocks until the app and its watchdog are both gone.
+Filename: "{app}\{#MyAppExe}"; Parameters: "--exit"; Flags: runhidden waituntilterminated; RunOnceId: "StopQuickPane"
+
+[Code]
+{ Same reasoning on the way in: an upgrade over a running copy has to stop it before the executable can
+  be replaced, and Inno's own force-close would look like a crash to the watchdog. }
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+  Exe: String;
+begin
+  Result := '';
+  Exe := ExpandConstant('{app}\{#MyAppExe}');
+  if FileExists(Exe) then
+    Exec(Exe, '--exit', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;

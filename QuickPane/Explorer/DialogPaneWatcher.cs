@@ -223,6 +223,12 @@ namespace QuickPane.Explorer
             foreach (var kv in _inside) if (!NM.IsWindow(kv.Key)) dead.Add(kv.Key);
             foreach (var h in dead) Detach(h);
 
+            // Snapshots from here down. Positioning and relayout both drive foreign windows, and a
+            // destroy event arriving mid-pass removes an entry, so iterating the live dictionaries
+            // would throw partway through and abandon the remaining panes.
+            var besideNow = new List<KeyValuePair<IntPtr, FollowerPane>>(_beside);
+            var insideNow = new List<KeyValuePair<IntPtr, DialogInsidePane>>(_inside);
+
             // Drop cached verdicts for windows that no longer exist, so the map cannot grow without
             // bound and a recycled HWND value is never trusted with a stale answer.
             if (_verdicts.Count > 0)
@@ -233,12 +239,12 @@ namespace QuickPane.Explorer
                 if (gone != null) foreach (var h in gone) ForgetWindow(h);
             }
 
-            foreach (var kv in _beside) PositionBeside(kv.Key, kv.Value);
-            foreach (var kv in _inside) kv.Value.Relayout();
+            foreach (var kv in besideNow) PositionBeside(kv.Key, kv.Value);
+            foreach (var kv in insideNow) kv.Value.Relayout();
 
             // Hand any dialog that fought the inside shift over to the non-invasive beside follower.
             List<IntPtr> failed = null;
-            foreach (var kv in _inside) if (kv.Value.Failed) (failed ?? (failed = new List<IntPtr>())).Add(kv.Key);
+            foreach (var kv in insideNow) if (kv.Value.Failed) (failed ?? (failed = new List<IntPtr>())).Add(kv.Key);
             if (failed != null) foreach (var h in failed) DemoteToBeside(h);
         }
 
@@ -264,7 +270,9 @@ namespace QuickPane.Explorer
             var pane = new FollowerPane(hwnd, p => WorkQueue.Post(() => DialogNavigator.Navigate(hwnd, p)));
             _beside[hwnd] = pane;
             PositionBeside(hwnd, pane);
-            Log.Info("dialog moved to beside (inside reparent fought back) " + hwnd.ToString("X"));
+            Log.Event("glitch", "the " + DialogNavigator.Owner(hwnd) + " dialog " + hwnd.ToString("X") +
+                " ran its own layout over the inside pane, so it was handed to the beside follower and " +
+                "that app's later dialogs skip the inside attempt for the rest of this session.");
         }
 
         private static string DumpChildren(IntPtr root)

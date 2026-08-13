@@ -85,6 +85,52 @@ namespace QuickPane.Models
         public int SidebarWidthPx { get; set; } = 220;
     }
 
+    /// <summary>One saved SSH/SFTP connection, mounted as a real drive via SSHFS-Win. Field layout
+    /// mirrors PuTTY/KiTTY (host, port, username, private key path) plus WinSCP's keepalive settings.</summary>
+    [DataContract]
+    public sealed class SshProfile
+    {
+        [DataMember(Name = "name", Order = 0)]
+        public string Name { get; set; } = "New connection";
+
+        [DataMember(Name = "hostname", Order = 1)]
+        public string Hostname { get; set; } = "";
+
+        [DataMember(Name = "port", Order = 2)]
+        public int Port { get; set; } = 22;
+
+        [DataMember(Name = "username", Order = 3)]
+        public string Username { get; set; } = "";
+
+        // "key" or "password", same split as PuTTY's auth panel.
+        [DataMember(Name = "authMethod", Order = 4)]
+        public string AuthMethod { get; set; } = "key";
+
+        [DataMember(Name = "privateKeyPath", Order = 5, EmitDefaultValue = false)]
+        public string PrivateKeyPath { get; set; } = "";
+
+        // Stored in plain text in settings.json, same as a saved WinSCP/PuTTY session password.
+        // Key auth avoids this entirely and is the recommended path.
+        [DataMember(Name = "password", Order = 6, EmitDefaultValue = false)]
+        public string Password { get; set; } = "";
+
+        [DataMember(Name = "remotePath", Order = 7)]
+        public string RemotePath { get; set; } = "/";
+
+        [DataMember(Name = "driveLetter", Order = 8)]
+        public string DriveLetter { get; set; } = "S:";
+
+        // WinSCP's "Seconds between keepalive packets", passed through as ServerAliveInterval.
+        [DataMember(Name = "keepAliveInterval", Order = 9)]
+        public int KeepAliveInterval { get; set; } = 10;
+
+        [DataMember(Name = "keepAliveCountMax", Order = 10)]
+        public int KeepAliveCountMax { get; set; } = 3;
+
+        [DataMember(Name = "reconnect", Order = 11)]
+        public bool Reconnect { get; set; } = true;
+    }
+
     /// <summary>Serialized to %APPDATA%\QuickPane\settings.json.</summary>
     [DataContract]
     public sealed class AppSettings
@@ -125,6 +171,10 @@ namespace QuickPane.Models
 
         [DataMember(Name = "activeProfile", Order = 9, EmitDefaultValue = false)]
         public int ActiveProfileIndex { get; set; }
+
+        // Saved SSH/SFTP connections, mounted as real drives via SSHFS-Win.
+        [DataMember(Name = "sshProfiles", Order = 12, EmitDefaultValue = false)]
+        public List<SshProfile> SshProfiles { get; set; }
 
         // A row of profile tabs under the QuickPane title that switches the shown profile.
         [DataMember(Name = "showProfileTabs", Order = 10)]
@@ -183,8 +233,10 @@ namespace QuickPane.Models
                     new SectionSetting { Type = "recents",  Visible = true, Order = 1 },
                     new SectionSetting { Type = "computer", Visible = true, Order = 2 },
                     new SectionSetting { Type = "network",  Visible = true, Order = 3 },
-                    new SectionSetting { Type = "linux",    Visible = true, Order = 4 }
-                }
+                    new SectionSetting { Type = "linux",    Visible = true, Order = 4 },
+                    new SectionSetting { Type = "ssh",      Visible = true, Order = 5 }
+                },
+                SshProfiles = new List<SshProfile>()
             };
         }
 
@@ -197,6 +249,19 @@ namespace QuickPane.Models
             EnsureSection("computer", 2);
             EnsureSection("network", 3);
             EnsureSection("linux", 4);
+            EnsureSection("ssh", 5);
+            if (SshProfiles == null) SshProfiles = new List<SshProfile>();
+            foreach (var sp in SshProfiles)
+            {
+                if (string.IsNullOrWhiteSpace(sp.Name)) sp.Name = sp.Hostname;
+                if (sp.Port <= 0) sp.Port = 22;
+                if (string.IsNullOrWhiteSpace(sp.RemotePath)) sp.RemotePath = "/";
+                if (string.IsNullOrWhiteSpace(sp.DriveLetter)) sp.DriveLetter = "S:";
+                if (sp.KeepAliveInterval <= 0) sp.KeepAliveInterval = 10;
+                if (sp.KeepAliveCountMax <= 0) sp.KeepAliveCountMax = 3;
+                var am = (sp.AuthMethod ?? "key").Trim().ToLowerInvariant();
+                sp.AuthMethod = am == "password" ? "password" : "key";
+            }
             if (RecentsMaxCount < 5) RecentsMaxCount = 5;
             if (RecentsMaxCount > 50) RecentsMaxCount = 50;
             if (SidebarWidthPx < 160) SidebarWidthPx = 160;

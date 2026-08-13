@@ -62,6 +62,7 @@ namespace QuickPane.UI
             _wired = true;
             if (App.Theme != null) App.Theme.ThemeChanged += OnDataChanged;
             if (App.Settings != null) App.Settings.Changed += OnSettingsChanged;
+            SshfsService.MountStatusChanged += OnSshMountChanged;
         }
 
         private void Unwire()
@@ -70,6 +71,12 @@ namespace QuickPane.UI
             _wired = false;
             if (App.Theme != null) App.Theme.ThemeChanged -= OnDataChanged;
             if (App.Settings != null) App.Settings.Changed -= OnSettingsChanged;
+            SshfsService.MountStatusChanged -= OnSshMountChanged;
+        }
+
+        private void OnSshMountChanged(object sender, EventArgs e)
+        {
+            QueueBuild();
         }
 
         private void OnDataChanged()
@@ -193,6 +200,11 @@ namespace QuickPane.UI
                     if (!ShellRootSection.WslPresent()) return null;
                     var lx = new ShellRootSection("linux", "Linux", "\\\\wsl$", true);
                     lx.Build(_navigate); return lx;
+                case "ssh":
+                    var profiles = App.Settings.Current.SshProfiles;
+                    if (profiles == null || profiles.Count == 0) return null;
+                    var ssh = new SshSection();
+                    ssh.Build(_navigate); return ssh;
                 default:
                     return null;
             }

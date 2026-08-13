@@ -58,6 +58,12 @@ namespace QuickPane.Explorer
             CaptureChildren();
             if (_orig.Count == 0) return false; // controls not built yet; caller retries
 
+            // Reparenting a WPF host into another process's window is the least forgiving thing the app
+            // does, so the breadcrumb names it and the app it is doing it to. A termination that never
+            // reaches a managed handler still leaves this in the heartbeat.
+            Log.Activity("attaching inside pane to the " + QuickPane.Interop.DialogNavigator.Owner(_dlg) +
+                " dialog " + _dlg.ToString("X"));
+
             try
             {
                 // Widen the dialog by the pane width (grow the right edge), then push every child right so
@@ -88,6 +94,7 @@ namespace QuickPane.Explorer
                 _lastW = _origWinW + _width;
                 _lastH = _origWinH;
                 Log.Info("dialog inside pane attached to " + _dlg.ToString("X"));
+                Log.Activity("idle");
                 return true;
             }
             catch (Exception ex)
@@ -220,7 +227,14 @@ namespace QuickPane.Explorer
 
             // Back off if a dialog keeps fighting the layout, so a stubborn dialog can never loop forever.
             if (now - _windowStart > 1500) { _windowStart = now; _relayoutCount = 0; }
-            if (++_relayoutCount > 12) { _disabled = true; Log.Info("DialogInsidePane backed off " + _dlg.ToString("X")); return; }
+            if (++_relayoutCount > 12)
+            {
+                _disabled = true;
+                Log.Event("glitch", "the " + QuickPane.Interop.DialogNavigator.Owner(_dlg) + " dialog " +
+                    _dlg.ToString("X") + " moved its controls back " + _relayoutCount +
+                    " times in under 1.5 s, so pane maintenance for it is paused until the dialog is resized.");
+                return;
+            }
 
             _applying = true;
             try { CaptureNewChildren(); ShiftChildren(); }
@@ -236,6 +250,8 @@ namespace QuickPane.Explorer
         // both on teardown and when the dialog is handed off to the beside follower.
         private void Restore()
         {
+            Log.Activity("restoring the " + QuickPane.Interop.DialogNavigator.Owner(_dlg) + " dialog " +
+                _dlg.ToString("X") + " to its own layout");
             try
             {
                 if (NM.IsWindow(_dlg))
@@ -254,6 +270,7 @@ namespace QuickPane.Explorer
             catch (Exception ex) { Log.Error("DialogInsidePane restore", ex); }
             try { _host?.Dispose(); } catch { }
             _host = null; _sidebar = null;
+            Log.Activity("idle");
         }
 
         public void Dispose()

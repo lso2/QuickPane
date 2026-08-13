@@ -76,6 +76,7 @@ namespace QuickPane.UI
             Host.Children.Add(globals);
 
             Host.Children.Add(ProfileTabsBlock(s));
+            Host.Children.Add(SshBlock(s));
             Host.Children.Add(SubHeading("Groups"));
             var scroller = new ScrollViewer
             {
@@ -173,6 +174,222 @@ namespace QuickPane.UI
             foreach (var sec in s.Sections.OrderBy(x => x.Order).ToList())
                 sp.Children.Add(BuildSectionRow(sec));
             return sp;
+        }
+
+        // ---- SSH connections ----
+        private FrameworkElement SshBlock(AppSettings s)
+        {
+            var sp = new StackPanel { Margin = new Thickness(0, 0, 0, 4) };
+            sp.Children.Add(SubHeading("SSH connections"));
+
+            if (!SshfsService.IsInstalled())
+            {
+                sp.Children.Add(new TextBlock
+                {
+                    Text = "SSHFS-Win is not installed. Install WinFsp and SSHFS-Win (github.com/winfsp) first, then connections mount here as real drives.",
+                    FontSize = 11,
+                    TextWrapping = TextWrapping.Wrap,
+                    Foreground = UiHelpers.AppBrush("TextSecondary"),
+                    Margin = new Thickness(0, 0, 0, 6)
+                });
+            }
+
+            var scroller = new ScrollViewer
+            {
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            var row = new StackPanel { Orientation = Orientation.Horizontal };
+            if (s.SshProfiles != null)
+                for (int i = 0; i < s.SshProfiles.Count; i++) row.Children.Add(BuildSshCard(i));
+            row.Children.Add(BuildAddSshCard());
+            scroller.Content = row;
+            sp.Children.Add(scroller);
+            return sp;
+        }
+
+        private FrameworkElement BuildSshCard(int index)
+        {
+            var s = _settings.Current;
+            var p = s.SshProfiles[index];
+            bool connected = SshfsService.IsMounted(p.Name);
+
+            var border = new Border
+            {
+                Width = 260,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 0, 10, 0),
+                Padding = new Thickness(8),
+                Background = CardBrush(),
+                BorderBrush = connected ? UiHelpers.AppBrush("AccentBrush") : UiHelpers.AppBrush("SeparatorColor"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4)
+            };
+            var sp = new StackPanel();
+
+            var header = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+            header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var nameBox = new TextBox { Text = p.Name, FontSize = 13, FontWeight = FontWeights.SemiBold, BorderThickness = new Thickness(0), Background = Brushes.Transparent };
+            nameBox.LostKeyboardFocus += (a, b) => { p.Name = nameBox.Text; _settings.Save(); };
+            Grid.SetColumn(nameBox, 0); header.Children.Add(nameBox);
+            var del = TextButton("✕");
+            del.ToolTip = "Remove connection";
+            del.Click += (a, b) =>
+            {
+                if (connected) SshfsService.Unmount(p);
+                s.SshProfiles.RemoveAt(index);
+                _settings.Save();
+                BuildUI();
+            };
+            Grid.SetColumn(del, 1); header.Children.Add(del);
+            sp.Children.Add(header);
+
+            sp.Children.Add(ProfileFieldLabel("Hostname"));
+            sp.Children.Add(SshTextRow(p.Hostname, v => { p.Hostname = v; _settings.Save(); }));
+            sp.Children.Add(ProfileFieldLabel("Port"));
+            sp.Children.Add(BuildStepper(p.Port, 1, 65535, 1, v => { p.Port = v; _settings.Save(); }));
+            sp.Children.Add(ProfileFieldLabel("Auto-login username"));
+            sp.Children.Add(SshTextRow(p.Username, v => { p.Username = v; _settings.Save(); }));
+
+            sp.Children.Add(ProfileFieldLabel("Authentication"));
+            var keyRadio = ModeRadioGroup("qpAuth" + index, "Private key", p.AuthMethod == "key", () => { p.AuthMethod = "key"; _settings.Save(); BuildUI(); });
+            var pwRadio = ModeRadioGroup("qpAuth" + index, "Password", p.AuthMethod == "password", () => { p.AuthMethod = "password"; _settings.Save(); BuildUI(); });
+            sp.Children.Add(keyRadio);
+            sp.Children.Add(pwRadio);
+
+            if (p.AuthMethod == "key")
+            {
+                sp.Children.Add(ProfileFieldLabel("Private key file for authentication"));
+                sp.Children.Add(BuildKeyFileRow(index, p));
+            }
+            else
+            {
+                sp.Children.Add(ProfileFieldLabel("Auto-login password"));
+                var pwBox = new PasswordBox { FontSize = 11 };
+                pwBox.Password = p.Password;
+                pwBox.LostKeyboardFocus += (a, b) => { p.Password = pwBox.Password; _settings.Save(); };
+                sp.Children.Add(pwBox);
+            }
+
+            sp.Children.Add(ProfileFieldLabel("Remote path"));
+            sp.Children.Add(SshTextRow(p.RemotePath, v => { p.RemotePath = v; _settings.Save(); }));
+            sp.Children.Add(ProfileFieldLabel("Drive letter"));
+            sp.Children.Add(SshTextRow(p.DriveLetter, v => { p.DriveLetter = v; _settings.Save(); }));
+            sp.Children.Add(ProfileFieldLabel("Keepalive: seconds between packets"));
+            sp.Children.Add(BuildStepper(p.KeepAliveInterval, 0, 300, 5, v => { p.KeepAliveInterval = v; _settings.Save(); }));
+            sp.Children.Add(ModeCheck("Reconnect automatically", p.Reconnect, on => { p.Reconnect = on; _settings.Save(); }));
+
+            var actionRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+            var connBtn = TextButton(connected ? "Disconnect" : "Connect");
+            connBtn.Click += (a, b) =>
+            {
+                if (connected) SshfsService.Unmount(p);
+                else
+                {
+                    var err = SshfsService.Mount(p);
+                    if (err != null) { WinForms.MessageBox.Show(err, "QuickPane"); return; }
+                }
+                BuildUI();
+            };
+            actionRow.Children.Add(connBtn);
+            if (connected)
+            {
+                var status = new TextBlock
+                {
+                    Text = "● Connected",
+                    FontSize = 11,
+                    Foreground = UiHelpers.AppBrush("AccentBrush"),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(6, 0, 0, 0)
+                };
+                actionRow.Children.Add(status);
+            }
+            sp.Children.Add(actionRow);
+
+            border.Child = sp;
+            return border;
+        }
+
+        private FrameworkElement BuildKeyFileRow(int index, SshProfile p)
+        {
+            var row = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var box = new TextBox { Text = p.PrivateKeyPath, FontSize = 11, VerticalContentAlignment = VerticalAlignment.Center };
+            box.LostKeyboardFocus += (a, b) => { p.PrivateKeyPath = box.Text; _settings.Save(); };
+            Grid.SetColumn(box, 0); row.Children.Add(box);
+            var browse = TextButton("...");
+            browse.Margin = new Thickness(4, 0, 0, 0);
+            browse.ToolTip = "PuTTY keys must be converted first: PuTTYgen -> Conversions -> Export OpenSSH key";
+            browse.Click += (a, b) =>
+            {
+                var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "Private key (*.*)|*.*" };
+                if (dlg.ShowDialog() == true) { box.Text = dlg.FileName; p.PrivateKeyPath = dlg.FileName; _settings.Save(); }
+            };
+            Grid.SetColumn(browse, 1); row.Children.Add(browse);
+            return row;
+        }
+
+        private FrameworkElement SshTextRow(string value, Action<string> onCommit)
+        {
+            var box = new TextBox { Text = value, FontSize = 11, Margin = new Thickness(0, 0, 0, 4) };
+            box.LostKeyboardFocus += (a, b) => onCommit(box.Text);
+            box.KeyDown += (a, b) => { if (b.Key == Key.Enter) onCommit(box.Text); };
+            return box;
+        }
+
+        private FrameworkElement ModeRadioGroup(string groupName, string label, bool isChecked, Action onSelect)
+        {
+            var rb = new RadioButton
+            {
+                Content = label,
+                IsChecked = isChecked,
+                GroupName = groupName,
+                Foreground = UiHelpers.AppBrush("TextPrimary"),
+                FontSize = 12,
+                Margin = new Thickness(0, 2, 0, 0)
+            };
+            rb.Checked += (a, b) => onSelect();
+            return rb;
+        }
+
+        private FrameworkElement BuildAddSshCard()
+        {
+            var border = new Border
+            {
+                Width = 150,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 0, 10, 0),
+                Padding = new Thickness(8),
+                Background = CardBrush(),
+                BorderBrush = UiHelpers.AppBrush("SeparatorColor"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4)
+            };
+            var add = TextButton("+  Add connection");
+            add.VerticalAlignment = VerticalAlignment.Center;
+            add.Click += (a, b) =>
+            {
+                if (_settings.Current.SshProfiles == null) _settings.Current.SshProfiles = new System.Collections.Generic.List<SshProfile>();
+                var next = _settings.Current.SshProfiles.Count + 1;
+                _settings.Current.SshProfiles.Add(new SshProfile { Name = "Connection " + next, DriveLetter = NextFreeDriveLetter() });
+                _settings.Save();
+                BuildUI();
+            };
+            border.Child = add;
+            return border;
+        }
+
+        private static string NextFreeDriveLetter()
+        {
+            for (char c = 'S'; c <= 'Z'; c++)
+            {
+                string letter = c + ":";
+                if (!System.IO.Directory.Exists(letter + @"\")) return letter;
+            }
+            return "S:";
         }
 
         // ---- profile columns ----
@@ -906,6 +1123,7 @@ namespace QuickPane.UI
                 case "computer": return "This PC";
                 case "network": return "Network";
                 case "linux": return "Linux";
+                case "ssh": return "SSH";
                 default: return type;
             }
         }

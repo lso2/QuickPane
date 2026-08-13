@@ -22,7 +22,6 @@ namespace QuickPane
     /// </summary>
     public partial class App : Application
     {
-        private const string SingleInstanceMutex = "QuickPane.SingleInstance.{3D9A2B1C}";
         private const string PinVerb = "--pin";
 
         private Mutex _mutex;
@@ -48,29 +47,47 @@ namespace QuickPane
             Log.Init();
             Log.Info("QuickPane starting. args=[" + string.Join(" ", e.Args) + "]");
 
-            // Last-resort exception logging. Without these, any unhandled exception killed the
-            // process with nothing in debug.log, which is why crashes were invisible. Dispatcher
-            // exceptions are logged and swallowed so one bad event handler cannot take down every
-            // embedded pane; appdomain/task exceptions are at least recorded before the CLR acts.
+            // Last-resort exception logging. Dispatcher exceptions are contained so one bad event
+            // handler cannot take down every embedded pane, while appdomain and task faults are written
+            // to the journal before the CLR acts on them. A terminating appdomain fault is the one case
+            // the process does not survive, so it is stamped into the heartbeat as well, which lets the
+            // watchdog name the cause rather than only reporting that the app vanished.
             DispatcherUnhandledException += (s, a) =>
             {
-                Log.Error("Unhandled dispatcher exception", a.Exception);
+                Log.Event("crash", "unhandled exception on the UI thread, contained so the panes survive", a.Exception);
                 a.Handled = true;
             };
             AppDomain.CurrentDomain.UnhandledException += (s, a) =>
             {
                 var ex2 = a.ExceptionObject as Exception;
-                Log.Error("Unhandled appdomain exception" + (a.IsTerminating ? " (terminating)" : ""),
-                    ex2 ?? new Exception(a.ExceptionObject != null ? a.ExceptionObject.ToString() : "unknown"));
+                var wrapped = ex2 ?? new Exception(a.ExceptionObject != null ? a.ExceptionObject.ToString() : "unknown");
+                if (a.IsTerminating)
+                {
+                    Log.Activity("terminating: " + wrapped.GetType().Name + ": " + wrapped.Message);
+                    Log.Event("crash", "unhandled exception is terminating the process", wrapped);
+                }
+                else Log.Event("crash", "unhandled exception on a background thread", wrapped);
             };
             System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (s, a) =>
             {
-                Log.Error("Unobserved task exception", a.Exception);
+                Log.Event("crash", "unobserved task exception", a.Exception);
                 a.SetObserved();
             };
 
             try
             {
+                if (e.Args.Length >= 2 && string.Equals(e.Args[0], Watchdog.Verb, StringComparison.OrdinalIgnoreCase))
+                {
+                    RunWatchdogMode(e.Args[1]);
+                    return;
+                }
+
+                if (e.Args.Length >= 1 && string.Equals(e.Args[0], ShutdownSignal.Verb, StringComparison.OrdinalIgnoreCase))
+                {
+                    RunExitMode();
+                    return;
+                }
+
                 if (e.Args.Length >= 2 && string.Equals(e.Args[0], PinVerb, StringComparison.OrdinalIgnoreCase))
                 {
                     RunPinMode(e.Args[1]);
@@ -84,13 +101,40 @@ namespace QuickPane
                     return;
                 }
 
+                CrashGuard.BeginSession();
+                ShutdownSignal.Listen(() => Dispatcher.BeginInvoke(new Action(Shutdown)));
+                Watchdog.Launch();
+                ShortcutRepair.EnsureStartMenu();
                 StartTrayApp();
             }
             catch (Exception ex)
             {
-                Log.Error("Fatal during startup", ex);
+                Log.Event("crash", "startup failed, so the app is exiting", ex);
                 Shutdown();
             }
+        }
+
+        // ---- Exit mode (used by the installer and the uninstaller) -----------
+
+        /// <summary>Ask the running tray instance to shut down and block until it and its watchdog are
+        /// gone. The exit code is what an installer reads to decide whether the files are free, so a
+        /// timeout has to report failure rather than pretend the app closed.</summary>
+        private void RunExitMode()
+        {
+            int code = ShutdownSignal.RequestExit(TimeSpan.FromSeconds(15)) ? 0 : 1;
+            Shutdown(code);
+        }
+
+        // ---- Watchdog mode (companion process) -------------------------------
+
+        /// <summary>Wait for the tray instance to exit, then either exit quietly or restart it. No
+        /// mutex, no tray icon, no hooks, and no windows, because this process exists only to outlive
+        /// whatever takes the app down.</summary>
+        private void RunWatchdogMode(string pidArg)
+        {
+            int pid;
+            if (!int.TryParse(pidArg, out pid)) { Shutdown(); return; }
+            Watchdog.Run(pid, () => Dispatcher.BeginInvoke(new Action(Shutdown)));
         }
 
         // ---- Normal tray mode ------------------------------------------------
@@ -143,6 +187,10 @@ namespace QuickPane
             ApplyHosts();            // starts the in-window pane and/or the desktop dock per settings
 
             Log.Info("QuickPane running.");
+
+            // Move the breadcrumb off "starting", or a crash hours later would be journaled against
+            // startup and point the search at the wrong place entirely.
+            Log.Activity("running");
         }
 
         private string _windowMode;
@@ -187,11 +235,12 @@ namespace QuickPane
             }
 
             Log.Info("Hosts: mode=" + _windowMode + " dock=" + _dockOn + " autohide=" + _dockAutoHide + " allDesktops=" + _dockAllDesktops);
+            Log.Activity("running, mode=" + _windowMode + ", dock=" + _dockOn);
         }
 
         private bool ClaimSingleInstance()
         {
-            _mutex = new Mutex(true, SingleInstanceMutex, out _ownsMutex);
+            _mutex = new Mutex(true, CrashGuard.InstanceMutexName, out _ownsMutex);
             return _ownsMutex;
         }
 
@@ -211,6 +260,13 @@ namespace QuickPane
             menu.Items.Add("Settings", null, (s, a) => Dispatcher.Invoke(ShowSettingsWindow));
             menu.Items.Add("Reload groups", null, (s, a) => Dispatcher.Invoke(() => Groups.Reload()));
             menu.Items.Add("Re-attach sidebars", null, (s, a) => Dispatcher.Invoke(() => { if (_watcher != null) _watcher.Rescan(); }));
+
+            var toolsMenu = new WinForms.ToolStripMenuItem("Troubleshooting");
+            toolsMenu.DropDownItems.Add("Open log folder", null, (s, a) => Log.OpenFolder());
+            toolsMenu.DropDownItems.Add("Create desktop shortcut", null, (s, a) => CreateDesktopShortcut());
+            toolsMenu.DropDownItems.Add("Restart QuickPane", null, (s, a) => Dispatcher.Invoke(RestartSelf));
+            menu.Items.Add(toolsMenu);
+
             menu.Items.Add(new WinForms.ToolStripSeparator());
             menu.Items.Add("Exit", null, (s, a) => Dispatcher.Invoke(Shutdown));
 
@@ -234,6 +290,37 @@ namespace QuickPane
             };
             _tray.ContextMenuStrip = menu;
             _tray.DoubleClick += (s, a) => Dispatcher.Invoke(ShowSettingsWindow);
+        }
+
+        private static void CreateDesktopShortcut()
+        {
+            var path = ShortcutRepair.CreateDesktop();
+            WinForms.MessageBox.Show(
+                path != null ? "Desktop shortcut created:\n" + path
+                             : "The desktop shortcut could not be created. See events.log in the log folder.",
+                "QuickPane");
+        }
+
+        /// <summary>Relaunch and exit. The heartbeat is stamped clean first so the watchdog treats this
+        /// as an orderly exit and does not add a restart of its own on top of this one.</summary>
+        private void RestartSelf()
+        {
+            try
+            {
+                var exe = Log.ExePath();
+                if (string.IsNullOrEmpty(exe)) return;
+                Log.Event("restart", "restart requested from the tray menu.");
+                CrashGuard.MarkCleanExit();
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = exe,
+                    Arguments = "",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                });
+            }
+            catch (Exception ex) { Log.Event("restart", "restart from the tray menu failed", ex); }
+            Shutdown();
         }
 
         private static Drawing.Icon LoadAppIcon()
@@ -313,6 +400,15 @@ namespace QuickPane
         protected override void OnExit(ExitEventArgs e)
         {
             Log.Info("QuickPane shutting down.");
+            Log.Activity("shutting down");
+
+            // Stamp the heartbeat before anything is torn down, because teardown drives foreign windows
+            // and can take long enough for the watchdog to see the process go while the file still reads
+            // as a live session. CrashGuard ignores the call in pin and watchdog mode, where this process
+            // never opened the session the file describes.
+            CrashGuard.MarkCleanExit();
+            ShutdownSignal.Stop();
+
             try { _recentTracker?.Dispose(); } catch (Exception ex) { Log.Error("recent tracker dispose", ex); }
             try { _dialogPanes?.Dispose(); } catch (Exception ex) { Log.Error("dialog panes dispose", ex); }
             try { _watcher?.Dispose(); } catch (Exception ex) { Log.Error("watcher dispose", ex); }
