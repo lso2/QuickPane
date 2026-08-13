@@ -4,7 +4,7 @@
 ![.NET Framework](https://img.shields.io/badge/.NET%20Framework-4.8-512BD4.svg?logo=dotnet&logoColor=white)
 ![C#](https://img.shields.io/badge/C%23-7.3-239120.svg?logo=csharp&logoColor=white)
 ![UI](https://img.shields.io/badge/UI-WPF-1f6feb.svg)
-![Version](https://img.shields.io/badge/Version-3.2.15-success.svg)
+![Version](https://img.shields.io/badge/Version-3.7.0-success.svg)
 ![License](https://img.shields.io/badge/License-MIT-orange.svg)
 
 A folder sidebar for Windows File Explorer. QuickPane embeds a pinned-folders pane inside every Explorer window, so your groups, recent locations, drives, network shares, and WSL distros travel with the window you are already using. Pin it inside the window, float it beside the window, or run it as a slim screen-edge dock. Everything runs locally as a single tray app, no code is ever injected into Explorer, and all data stays in plain files under your user profile.
