@@ -26,6 +26,10 @@ namespace QuickPane.UI
         private Action<string> _navigate;
         private Point _dragStart;
         private bool _maybeDrag;
+        // Every pin, group header and tab shares these fields, so the press has to be tied to the element
+        // it landed on; otherwise the drag is claimed by whichever one the pointer has reached by the time
+        // it passes the threshold, and the row that moves is not the row that was grabbed.
+        private object _pressedSource;
         private readonly Dictionary<FrameworkElement, DropLineAdorner> _adorners = new Dictionary<FrameworkElement, DropLineAdorner>();
         private DragGhostAdorner _ghost;
         private AdornerLayer _ghostLayer;
@@ -64,6 +68,10 @@ namespace QuickPane.UI
             if (App.Groups != null) App.Groups.GroupsChanged -= QueueRebuild;
             PathStatus.Changed -= QueueRebuild;
         }
+
+        /// <summary>Release this section's subscriptions. Called by the pane, because a pane hosted in
+        /// an HwndSource never raises Unloaded.</summary>
+        public void Detach() { Unwire(); }
 
         private void QueueRebuild()
         {
@@ -193,8 +201,12 @@ namespace QuickPane.UI
             if (!group.Expanded) { items.Visibility = Visibility.Collapsed; items.MaxHeight = 0; }
             else chevron.Angle = 90;
 
-            Root.Children.Add(header);
-            Root.Children.Add(items);
+            // Header and rows go in together, so a group with nothing left after filtering goes away
+            // instead of leaving its name over an empty gap.
+            var block = new StackPanel { Tag = UiHelpers.FilterBlockTag };
+            block.Children.Add(header);
+            block.Children.Add(items);
+            Root.Children.Add(block);
         }
 
         // ---- single-tab header ----
@@ -318,26 +330,24 @@ namespace QuickPane.UI
             btn.PreviewMouseLeftButtonDown += (s, e) =>
             {
                 if (e.ClickCount == 2) { e.Handled = true; RenameTab(tab); return; }
-                _dragStart = e.GetPosition(null); _maybeDrag = true;
+                BeginMaybeDrag(btn, e);
             };
             btn.PreviewMouseLeftButtonUp += (s, e) =>
             {
-                if (_maybeDrag)
+                // Only the tab the press landed on counts as a click, so releasing over a tab after
+                // pressing somewhere else does not switch to it.
+                if (_maybeDrag && ReferenceEquals(_pressedSource, btn))
                 {
                     App.Groups.SetActiveTab(group, index);
                     group.Expanded = true; // clicking a tab while collapsed opens the group on that tab
                     UiState.SetExpanded("group:" + group.FolderPath, true);
                     Rebuild();
                 }
-                _maybeDrag = false;
+                EndMaybeDrag();
             };
             btn.MouseMove += (s, e) =>
             {
-                if (!_maybeDrag || e.LeftButton != MouseButtonState.Pressed) return;
-                var p = e.GetPosition(null);
-                if (Math.Abs(p.X - _dragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
-                    Math.Abs(p.Y - _dragStart.Y) < SystemParameters.MinimumVerticalDragDistance) return;
-                _maybeDrag = false;
+                if (!DragStarted(btn, e)) return;
                 try
                 {
                     var data = new DataObject();
@@ -469,16 +479,12 @@ namespace QuickPane.UI
             source.PreviewMouseLeftButtonDown += (s, e) =>
             {
                 if (e.ClickCount == 2) return;
-                _dragStart = e.GetPosition(null); _maybeDrag = true;
+                BeginMaybeDrag(source, e);
             };
-            source.PreviewMouseLeftButtonUp += (s, e) => _maybeDrag = false;
+            source.PreviewMouseLeftButtonUp += (s, e) => EndMaybeDrag();
             source.MouseMove += (s, e) =>
             {
-                if (!_maybeDrag || e.LeftButton != MouseButtonState.Pressed) return;
-                var p = e.GetPosition(null);
-                if (Math.Abs(p.X - _dragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
-                    Math.Abs(p.Y - _dragStart.Y) < SystemParameters.MinimumVerticalDragDistance) return;
-                _maybeDrag = false;
+                if (!DragStarted(source, e)) return;
                 try
                 {
                     var data = new DataObject();
@@ -578,18 +584,36 @@ namespace QuickPane.UI
             catch (Exception ex) { Log.Error("group drop", ex); }
         }
 
+        /// <summary>Remember the element a press landed on and start watching for a drag.</summary>
+        private void BeginMaybeDrag(object source, MouseButtonEventArgs e)
+        {
+            _pressedSource = source;
+            _dragStart = e.GetPosition(null);
+            _maybeDrag = true;
+        }
+
+        /// <summary>True once the pointer has travelled far enough for the press on this element to be a drag.</summary>
+        private bool DragStarted(object source, MouseEventArgs e)
+        {
+            if (!_maybeDrag || !ReferenceEquals(_pressedSource, source)) return false;
+            if (e.LeftButton != MouseButtonState.Pressed) { _maybeDrag = false; return false; }
+            var p = e.GetPosition(null);
+            if (Math.Abs(p.X - _dragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
+                Math.Abs(p.Y - _dragStart.Y) < SystemParameters.MinimumVerticalDragDistance) return false;
+            _maybeDrag = false;
+            return true;
+        }
+
+        private void EndMaybeDrag() { _maybeDrag = false; _pressedSource = null; }
+
         // ---- pins ----
         private void WirePinDragSource(FrameworkElement source, PinnedFolder pin)
         {
-            source.PreviewMouseLeftButtonDown += (s, e) => { _dragStart = e.GetPosition(null); _maybeDrag = true; };
-            source.PreviewMouseLeftButtonUp += (s, e) => _maybeDrag = false;
+            source.PreviewMouseLeftButtonDown += (s, e) => BeginMaybeDrag(source, e);
+            source.PreviewMouseLeftButtonUp += (s, e) => EndMaybeDrag();
             source.MouseMove += (s, e) =>
             {
-                if (!_maybeDrag || e.LeftButton != MouseButtonState.Pressed) return;
-                var p = e.GetPosition(null);
-                if (Math.Abs(p.X - _dragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
-                    Math.Abs(p.Y - _dragStart.Y) < SystemParameters.MinimumVerticalDragDistance) return;
-                _maybeDrag = false;
+                if (!DragStarted(source, e)) return;
                 try
                 {
                     var data = new DataObject();
@@ -748,6 +772,30 @@ namespace QuickPane.UI
             return menu;
         }
 
+        /// <summary>
+        /// Point a pin somewhere else without removing and re-pinning it. A pin whose target moved, or
+        /// was captured wrongly in the first place, keeps its name and its place in the group and only
+        /// its destination changes. The text is taken as typed, because a share that is offline right
+        /// now is still the path that was meant.
+        /// </summary>
+        private void EditPinPath(PinnedFolder pin)
+        {
+            try
+            {
+                if (pin == null || string.IsNullOrEmpty(pin.LinkPath)) return;
+                var typed = TextPrompt.Ask("Edit path", pin.TargetPath ?? "");
+                if (typed == null) return;
+                typed = typed.Trim().Trim('"');
+                if (typed.Length == 0) return;
+                if (string.Equals(typed, pin.TargetPath, StringComparison.OrdinalIgnoreCase)) return;
+
+                ShellLink.Create(pin.LinkPath, typed);
+                Log.Info("pin \"" + pin.DisplayName + "\" now points at " + typed + ".");
+                if (App.Groups != null) App.Groups.Reload();
+            }
+            catch (Exception ex) { Log.Error("edit the path of '" + (pin == null ? "" : pin.DisplayName) + "'", ex); }
+        }
+
         private ContextMenu BuildPinMenu(PinnedGroup group, PinnedTab tab, PinnedFolder pin)
         {
             var menu = new ContextMenu();
@@ -771,6 +819,7 @@ namespace QuickPane.UI
             }
             menu.Items.Add(new Separator());
             menu.Items.Add(Item("Rename", () => { var v = TextPrompt.Ask("Rename pin", pin.DisplayName); if (v != null) App.Groups.RenamePin(pin, v); }));
+            menu.Items.Add(Item("Edit path", () => EditPinPath(pin)));
             menu.Items.Add(new Separator());
 
             var moveTo = new MenuItem { Header = "Move to group" };

@@ -57,12 +57,56 @@ namespace QuickPane.Interop
             return FindDescendant(root, cls) != IntPtr.Zero;
         }
 
-        /// <summary>True for the legacy comdlg32 dialog (GetOpenFileName/GetSaveFileName, e.g. IrfanView),
-        /// which has a ComboBoxEx32 File name box. Its layout is owned by comdlg32 and breaks if its
-        /// controls are reparented or shifted, so the pane must attach beside it rather than inside.</summary>
+        /// <summary>What kind of file dialog a window is, or that it is too early to tell.</summary>
+        public enum DialogKind
+        {
+            NotReady,   // the child tree is still being built, so no verdict is safe yet
+            Modern,     // the common item dialog: navigation pane, address band, shell view
+            Classic     // legacy comdlg32 (GetOpenFileName/GetSaveFileName), e.g. IrfanView
+        }
+
+        /// <summary>Classify a file dialog from its child tree in one enumeration.
+        ///
+        /// The File name ComboBoxEx32 does not identify the classic dialog, because the modern one hosts
+        /// one too, so treating it as the marker sent every ordinary Windows Open and Save dialog down
+        /// the beside path and the configured pane mode never applied to them. "No modern markers" is
+        /// not enough either: a dialog is attached to the moment it is shown, when only part of its tree
+        /// exists, and a modern dialog that has built its combo but not yet its navigation chrome looks
+        /// exactly like a classic one. Both kinds are therefore recognized by positive evidence, and
+        /// anything else is NotReady for the caller to retry rather than guess at.</summary>
+        public static DialogKind Classify(IntPtr hwnd)
+        {
+            if (!NM.IsWindow(hwnd)) return DialogKind.NotReady;
+
+            bool combo = false, shellView = false, modern = false;
+            int visited = 0;
+            NM.EnumChildWindows(hwnd, (h, l) =>
+            {
+                switch (NM.ClassOf(h))
+                {
+                    case "ComboBoxEx32": combo = true; break;
+                    case "SHELLDLL_DefView": shellView = true; break;
+                    case "DUIViewWndClassName":
+                    case "NamespaceTreeControl":
+                    case "Address Band Root":
+                        modern = true;
+                        return false;   // settled; nothing else can change the verdict
+                }
+                return ++visited < 256;
+            }, IntPtr.Zero);
+
+            if (modern) return DialogKind.Modern;
+            // comdlg32 always carries both its File name combo and its file list. Either alone is a tree
+            // that is still filling in.
+            if (combo && shellView) return DialogKind.Classic;
+            return DialogKind.NotReady;
+        }
+
+        /// <summary>True for the legacy comdlg32 dialog, whose layout is owned by comdlg32 and breaks if
+        /// its controls are reparented or shifted, so the pane attaches beside it rather than inside.</summary>
         public static bool IsClassicDialog(IntPtr hwnd)
         {
-            return NM.IsWindow(hwnd) && HasDescendant(hwnd, "ComboBoxEx32");
+            return Classify(hwnd) == DialogKind.Classic;
         }
 
         /// <summary>Apps whose File name box committed the dialog instead of navigating into the folder.
@@ -94,6 +138,14 @@ namespace QuickPane.Interop
                     string after;
                     if (Consumed(addr, typed, out after)) return true;
 
+                    // An address bar that still holds what was written normally means the Enter was
+                    // dropped, because the shell rewrites a path it accepts. A path already in the form
+                    // the shell displays has nothing to rewrite, so the text is identical after a
+                    // navigation that worked. Scoring that as a failure is what sent a drive root on to
+                    // the File name box, where pressing Open closed the dialog under the user and then
+                    // barred that app from the route for the rest of the session.
+                    if (IsAlreadyCanonical(typed)) return true;
+
                     // The write landed and the Enter did not, which is the case that made Save As look
                     // intermittent: the pane reported a navigation the dialog never performed. Naming it
                     // here is what puts the pattern in the journal instead of leaving it to memory.
@@ -109,7 +161,9 @@ namespace QuickPane.Interop
                         dlg.ToString("X") + ", so the File name box is used instead.");
                 }
 
-                return NavigateByFileNameBox(dlg, typed);
+                // The File name box is the only route a classic comdlg32 dialog has, so what is safe to
+                // send there depends on whether an address bar was available at all.
+                return NavigateByFileNameBox(dlg, typed, addr != IntPtr.Zero);
             }
             catch (Exception ex) { Log.Event("dialog", "navigation failed for '" + path + "'", ex); return false; }
         }
@@ -118,7 +172,7 @@ namespace QuickPane.Interop
         /// common item dialog navigate rather than save when the text names a directory, which is what the
         /// trailing separator guarantees, and an app that commits anyway is remembered by name so it is
         /// never offered this route a second time.</summary>
-        private static bool NavigateByFileNameBox(IntPtr dlg, string typed)
+        private static bool NavigateByFileNameBox(IntPtr dlg, string typed, bool hadAddressBar)
         {
             var owner = Owner(dlg);
             if (_committingApps.Contains(owner))
@@ -134,6 +188,17 @@ namespace QuickPane.Interop
             {
                 Log.Event("dialog", "the " + owner + " dialog " + dlg.ToString("X") +
                     " exposed no File name box, so \"" + typed + "\" was not opened.");
+                return false;
+            }
+
+            // A drive root in this box is what closed modern Save dialogs outright, and for those the
+            // address bar route above already handles it. A classic comdlg32 dialog has no address bar,
+            // so this box is its only way to reach a drive, and refusing it here left clicking C: or D:
+            // doing nothing at all in those apps.
+            if (hadAddressBar && IsAlreadyCanonical(typed))
+            {
+                Log.Event("dialog", "the File name box is not used for the drive root \"" + typed +
+                    "\" on the " + owner + " dialog, because a dialog that reads it as a filename closes.");
                 return false;
             }
 
@@ -158,6 +223,16 @@ namespace QuickPane.Interop
                 }
             }
             return true;
+        }
+
+        /// <summary>True when the shell displays this path exactly as written, so an unchanged address
+        /// bar after Enter says nothing about whether the navigation happened. A drive root is the whole
+        /// of this case in practice: "D:\\" is already canonical, while a deeper path has its trailing
+        /// separator stripped on the way in.</summary>
+        private static bool IsAlreadyCanonical(string typed)
+        {
+            return !string.IsNullOrEmpty(typed) && typed.Length == 3 &&
+                   typed[1] == ':' && typed[2] == '\\' && char.IsLetter(typed[0]);
         }
 
         /// <summary>True once the control no longer holds the exact string that was written. The shell

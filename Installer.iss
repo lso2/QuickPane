@@ -10,7 +10,7 @@
 ; first so QuickPane.exe exists at the path in [Files].
 
 #define MyAppName "QuickPane"
-#define MyAppVersion "3.7.0"
+#define MyAppVersion "3.10.0"
 #define MyAppPublisher "PlexPixel"
 #define MyAppExe "QuickPane.exe"
 
@@ -41,6 +41,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 ; Build Release|x64 first so this path exists.
 Source: "QuickPane\bin\x64\Release\{#MyAppExe}"; DestDir: "{app}"; Flags: ignoreversion
+; The .config carries the per-monitor DPI switch, so it ships beside the executable.
+Source: "QuickPane\bin\x64\Release\{#MyAppExe}.config"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; QuickPane spends its life in the tray, so without a launcher here the only way back in after the app

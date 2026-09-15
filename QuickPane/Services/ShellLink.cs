@@ -58,6 +58,41 @@ namespace QuickPane.Services
             }
         }
 
+        /// <summary>
+        /// A shortcut's target together with the icon it was told to use. Windows shows a program by its
+        /// shortcut's icon, which is not always the first icon inside the executable: Chrome Canary and
+        /// Chrome are the same file name with the same first icon, and only the shortcut says which of
+        /// the icons inside is the one people recognize.
+        /// </summary>
+        public static bool ReadTargetAndIcon(string linkPath, out string target, out string iconFile, out int iconIndex)
+        {
+            target = null; iconFile = null; iconIndex = 0;
+            IShellLinkW link = null;
+            try
+            {
+                link = (IShellLinkW)new CShellLink();
+                ((IPersistFile)link).Load(linkPath, 0);
+
+                var sb = new StringBuilder(1024);
+                var data = new WIN32_FIND_DATAW();
+                link.GetPath(sb, sb.Capacity, ref data, SLGP_RAWPATH);
+                if (sb.Length == 0) return false;
+                target = sb.ToString();
+
+                var ic = new StringBuilder(1024);
+                int idx;
+                link.GetIconLocation(ic, ic.Capacity, out idx);
+                if (ic.Length > 0) { iconFile = ic.ToString(); iconIndex = idx; }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Error("read the shortcut '" + linkPath + "'", ex);
+                return false;
+            }
+            finally { if (link != null) Marshal.ReleaseComObject(link); }
+        }
+
         /// <summary>Resolve the target of a .lnk. Returns null if it cannot be read.</summary>
         public static string ResolveTarget(string linkPath)
         {

@@ -3,8 +3,19 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Focusable="True">
     <Border Background="{DynamicResource SidebarBackground}">
-        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
-            <StackPanel x:Name="Host" />
-        </ScrollViewer>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- Only the tab content scrolls, so the footer stays put on every tab instead of being
+                 pushed off the bottom by whichever tab happens to be the longest. -->
+            <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto" Padding="10">
+                <StackPanel x:Name="Host" />
+            </ScrollViewer>
+
+            <ContentControl Grid.Row="1" x:Name="FooterHost" Focusable="False" />
+        </Grid>
     </Border>
 </UserControl>

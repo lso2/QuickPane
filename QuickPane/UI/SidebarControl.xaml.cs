@@ -9,6 +9,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using QuickPane.Models;
 using QuickPane.Services;
+using NM = QuickPane.Interop.NativeMethods;
 
 namespace QuickPane.UI
 {
@@ -20,6 +21,25 @@ namespace QuickPane.UI
     public partial class SidebarControl : UserControl
     {
         private Action<string> _navigate;
+
+        /// <summary>Process name of the app whose file dialog hosts this pane, or null in an Explorer
+        /// window. The per-app sections exist only to answer "where does this app save", which an
+        /// Explorer window has no answer to, so they are built only when this is set.</summary>
+        public string HostApp { get; set; }
+
+        /// <summary>The pane a row belongs to, found by walking up from the row. A row is built before it
+        /// is in the tree, so anything that depends on the host app has to ask at the moment it is
+        /// needed rather than at construction.</summary>
+        internal static SidebarControl Owning(DependencyObject d)
+        {
+            while (d != null)
+            {
+                var sb = d as SidebarControl;
+                if (sb != null) return sb;
+                d = System.Windows.Media.VisualTreeHelper.GetParent(d) ?? LogicalTreeHelper.GetParent(d);
+            }
+            return null;
+        }
         private bool _wired;
 
         /// <summary>Set while a drag or a context menu is active anywhere in a pane, so the desktop
@@ -39,8 +59,9 @@ namespace QuickPane.UI
             AddHandler(ContextMenuOpeningEvent, new ContextMenuEventHandler((s, e) => SuppressAutoHide = true), true);
             AddHandler(ContextMenuClosingEvent, new ContextMenuEventHandler((s, e) => SuppressAutoHide = false), true);
 
+            PreviewMouseWheel += OnWheel;
             Loaded += (s, e) => { Wire(); HookHWheel(); };
-            Unloaded += (s, e) => Unwire();
+            Unloaded += (s, e) => { Unwire(); UnhookHWheel(); };
         }
 
         public void Attach(Action<string> navigate)
@@ -63,6 +84,7 @@ namespace QuickPane.UI
             if (App.Theme != null) App.Theme.ThemeChanged += OnDataChanged;
             if (App.Settings != null) App.Settings.Changed += OnSettingsChanged;
             SshfsService.MountStatusChanged += OnSshMountChanged;
+            PaneFilter.Changed += OnFilterChanged;
         }
 
         private void Unwire()
@@ -72,11 +94,94 @@ namespace QuickPane.UI
             if (App.Theme != null) App.Theme.ThemeChanged -= OnDataChanged;
             if (App.Settings != null) App.Settings.Changed -= OnSettingsChanged;
             SshfsService.MountStatusChanged -= OnSshMountChanged;
+            PaneFilter.Changed -= OnFilterChanged;
+        }
+
+        /// <summary>Release every subscription this pane and its sections hold.
+        ///
+        /// A pane is hosted in an HwndSource, and disposing that host destroys the window without WPF
+        /// ever raising Unloaded on the root visual, so the Unloaded handler above never runs for a pane
+        /// torn down that way. The theme, the settings store and the static PathStatus, DrivesChanged and
+        /// MountStatusChanged events all outlive the pane, so a pane left subscribed to them is held in
+        /// memory for the life of the process and goes on rebuilding itself every time one of them
+        /// fires. Every host therefore calls this before disposing its host.</summary>
+        public void Detach()
+        {
+            if (_detached) return;
+            _detached = true;
+            Unwire();
+            UnhookHWheel();
+            DetachSections();
+        }
+
+        private bool _detached;
+
+        /// <summary>Each section holds subscriptions of its own, and clearing the panel only raises
+        /// Unloaded on a pane that was loaded, so they are told directly.</summary>
+        private void DetachSections()
+        {
+            if (SectionsPanel == null) return;
+            foreach (var child in SectionsPanel.Children)
+            {
+                var g = child as GroupSection; if (g != null) { g.Detach(); continue; }
+                var r = child as RecentsSection; if (r != null) { r.Detach(); continue; }
+                var c = child as ComputerSection; if (c != null) { c.Detach(); continue; }
+                var ra = child as RecentAppsSection; if (ra != null) { ra.Detach(); continue; }
+                var ad = child as AppDefaultsSection; if (ad != null) { ad.Detach(); continue; }
+            }
         }
 
         private void OnSshMountChanged(object sender, EventArgs e)
         {
             QueueBuild();
+        }
+
+        // Typing only changes which rows are shown, so the rows are re-filtered rather than rebuilt.
+        private void OnFilterChanged()
+        {
+            if (_detached) return;
+            Dispatcher.BeginInvoke(new Action(ApplyFilter),
+                System.Windows.Threading.DispatcherPriority.Background);
+        }
+
+        /// <summary>Put the caret in the search box, for the keyboard shortcut.</summary>
+        public bool FocusSearch()
+        {
+            if (SectionsPanel == null) return false;
+            foreach (var child in SectionsPanel.Children)
+            {
+                var box = child as SearchSection;
+                if (box != null) { box.FocusBox(); return true; }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Give the pane's own window the keyboard, so a text box inside it receives what is typed.
+        ///
+        /// A pane lives inside another application's window and is created without activation, which is
+        /// what stops it stealing focus from Explorer every time it appears. The cost is that clicking
+        /// into it moves nothing: the host window's thread still owns the input queue that decides where
+        /// keystrokes land, so focus has to be taken by borrowing that queue for the length of the call.
+        /// </summary>
+        internal bool FocusHostWindow()
+        {
+            try
+            {
+                var src = PresentationSource.FromVisual(this) as HwndSource;
+                if (src == null || src.Handle == IntPtr.Zero) return false;
+
+                IntPtr fg = NM.GetForegroundWindow();
+                uint pid;
+                uint theirs = fg == IntPtr.Zero ? 0 : NM.GetWindowThreadProcessId(fg, out pid);
+                uint ours = NM.GetCurrentThreadId();
+
+                bool attached = theirs != 0 && theirs != ours && NM.AttachThreadInput(ours, theirs, true);
+                try { NM.SetFocus(src.Handle); }
+                finally { if (attached) NM.AttachThreadInput(ours, theirs, false); }
+                return true;
+            }
+            catch (Exception ex) { Log.Error("move the keyboard into the pane", ex); return false; }
         }
 
         private void OnDataChanged()
@@ -124,6 +229,83 @@ namespace QuickPane.UI
             RefreshProfileTabs();
             WireTabHover();
             ApplyProfileTabsState();
+            ApplyFilter();
+        }
+
+        /// <summary>Hide the rows that do not match what was typed in the search box.
+        ///
+        /// The filter runs over the rows the sections have already built rather than being threaded
+        /// through each section's construction, so a section never has to know a filter exists and the
+        /// behavior cannot drift between them. A section whose rows all disappear is hidden with them,
+        /// so the pane does not fill with empty headers while typing.</summary>
+        private void ApplyFilter()
+        {
+            if (SectionsPanel == null) return;
+            foreach (var child in SectionsPanel.Children)
+            {
+                var fe = child as FrameworkElement;
+                if (fe == null || fe is SearchSection) continue;
+                int shown = FilterWithin(fe);
+                // With no filter every section stands; with one, only those with a surviving row.
+                fe.Visibility = (!PaneFilter.Active || shown > 0) ? Visibility.Visible : Visibility.Collapsed;
+            }
+        }
+
+
+
+        /// <summary>
+        /// Apply the filter to every folder row beneath an element, returning how many stayed.
+        ///
+        /// The pane has two kinds of row and the filter has to know both: a flat row, and a tree row
+        /// that can hold more rows under it. A tree row survives when its own label matches or when
+        /// anything already expanded beneath it does, so filtering never hides the way to a match.
+        /// </summary>
+        private static int FilterWithin(DependencyObject root)
+        {
+            int shown = 0;
+            int count = VisualTreeHelper.GetChildrenCount(root);
+            for (int i = 0; i < count; i++)
+            {
+                var child = VisualTreeHelper.GetChild(root, i);
+
+                var item = child as FolderItem;
+                if (item != null)
+                {
+                    bool keepItem = PaneFilter.Matches(item.LabelText);
+                    item.Visibility = keepItem ? Visibility.Visible : Visibility.Collapsed;
+                    if (keepItem) shown++;
+                    continue;
+                }
+
+                var node = child as FolderTreeNode;
+                if (node != null)
+                {
+                    int beneath = node.ChildrenHost != null ? FilterWithin(node.ChildrenHost) : 0;
+                    bool keepNode = beneath > 0 || PaneFilter.Matches(node.LabelText);
+                    node.Visibility = keepNode ? Visibility.Visible : Visibility.Collapsed;
+                    if (keepNode) shown++;
+                    continue;
+                }
+
+                var fe = child as FrameworkElement;
+                var tag = fe == null ? null : fe.Tag as string;
+
+                if (tag == UiHelpers.SeparatorTag)
+                {
+                    fe.Visibility = PaneFilter.Active ? Visibility.Collapsed : Visibility.Visible;
+                    continue;
+                }
+
+                int inside = FilterWithin(child);
+
+                if (tag == UiHelpers.FilterBlockTag)
+                {
+                    fe.Visibility = (!PaneFilter.Active || inside > 0) ? Visibility.Visible : Visibility.Collapsed;
+                }
+
+                shown += inside;
+            }
+            return shown;
         }
 
         // ---- profile tabs ----------------------------------------------------
@@ -157,7 +339,9 @@ namespace QuickPane.UI
                     Margin = new Thickness(0, 0, 4, 0),
                     CornerRadius = new CornerRadius(3),
                     Cursor = System.Windows.Input.Cursors.Hand,
-                    Background = active ? UiHelpers.AppBrush("ItemHoverBackground") : Brushes.Transparent,
+                    // A neutral lift off the pane rather than an accent tint, which reads as a colored
+                    // highlight over a tinted surface.
+                    Background = active ? UiHelpers.AppBrush("BadgeBackground") : Brushes.Transparent,
                     Child = new TextBlock
                     {
                         Text = profiles[i].Name,
@@ -191,10 +375,20 @@ namespace QuickPane.UI
                     var g = new GroupSection(); g.Build(_navigate); return g;
                 case "recents":
                     var r = new RecentsSection(); r.Build(_navigate); return r;
+                case "search":
+                    var sb = new SearchSection(); sb.Build(_navigate); return sb;
+                case "appdefaults":
+                    // Only inside a file dialog: an Explorer window is not an app asking for a folder.
+                    if (string.IsNullOrEmpty(HostApp)) return null;
+                    var ad = new AppDefaultsSection(); ad.Build(_navigate, HostApp); return ad;
+                case "recentapps":
+                    var ra = new RecentAppsSection(); ra.Build(_navigate); return ra;
                 case "computer":
                     var c = new ComputerSection(); c.Build(_navigate); return c;
                 case "network":
-                    var n = new ShellRootSection("network", "Network", "::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}", false);
+                    // shell: form rather than the raw CLSID. Navigate2 rejects "::{GUID}" outright with
+                    // "value does not fall within the expected range", so clicking Network did nothing.
+                    var n = new ShellRootSection("network", "Network", "shell:NetworkPlacesFolder", false);
                     n.Build(_navigate); return n;
                 case "linux":
                     if (!ShellRootSection.WslPresent()) return null;
@@ -222,17 +416,39 @@ namespace QuickPane.UI
         // Slow the wheel to roughly match Explorer's nav pane, which scrolled about half as fast.
         // If the cursor is over a tab row, scroll that horizontally instead of the whole pane, because
         // this handler tunnels first and would otherwise eat the wheel before the tab row sees it.
-        private void OnScrollWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+        // ---- wheel routing --------------------------------------------
+        //
+        // Every wheel event in the pane arrives here, whichever device produced it, so there is one
+        // place that decides what moves and one rule per direction:
+        //
+        //   vertical wheel              -> the pane scrolls up and down, always
+        //   Shift + vertical wheel      -> the tab strip under the cursor moves sideways
+        //   horizontal wheel            -> the tab strip under the cursor moves sideways
+        //
+        // A tab strip is reached by sideways input only. Mapping a plain vertical wheel onto sideways
+        // movement means inventing a direction the system has no convention for, and whichever way it
+        // is chosen it reads as backwards to half the people using it.
+
+        private const double WheelStep = 48;   // pixels per notch, matching Explorer's nav pane
+
+        private void OnWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
         {
-            // The vertical wheel only ever scrolls the pane. Tabs are scrolled solely by horizontal
-            // wheel input, handled separately in OnMouseHWheel, so a normal wheel never touches them.
+            if (e.Delta == 0) return;
+
+            bool shift = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Shift) != 0;
+            if (shift)
+            {
+                // Shift + wheel away from you goes left, the same as every browser and file manager.
+                if (ScrollStripBy(StripUnderCursor(), -StepOf(e.Delta))) e.Handled = true;
+                return;
+            }
+
             e.Handled = true;
-            double delta = (e.Delta / 120.0) * 48; // pixels per wheel notch
-            Scroller.ScrollToVerticalOffset(Scroller.VerticalOffset - delta);
+            Scroller.ScrollToVerticalOffset(Scroller.VerticalOffset - StepOf(e.Delta));
         }
 
-        // Horizontal wheel (tilt wheel or trackpad sideways): always scroll the tab row under the
-        // cursor left and right. WPF does not route WM_MOUSEHWHEEL, so we hook it from the window.
+        // Horizontal wheel: a trackpad's two-finger sideways swipe and a tilt wheel both arrive as
+        // WM_MOUSEHWHEEL, which WPF does not route at all, so the pane's own window has to read it.
         private const int WM_MOUSEHWHEEL = 0x020E;
 
         private HwndSource _hwheelSrc;
@@ -246,25 +462,30 @@ namespace QuickPane.UI
             src.AddHook(HWheelProc);
         }
 
+        private void UnhookHWheel()
+        {
+            if (_hwheelSrc == null) return;
+            try { _hwheelSrc.RemoveHook(HWheelProc); } catch { }
+            _hwheelSrc = null;
+        }
+
         private IntPtr HWheelProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
             if (msg != WM_MOUSEHWHEEL) return IntPtr.Zero;
-            int delta = (short)((wParam.ToInt64() >> 16) & 0xFFFF); // tilt right is positive
-            var over = System.Windows.Input.Mouse.DirectlyOver as DependencyObject;
-            var tab = FindTabScroller(over);
-            if (tab != null && tab.ScrollableWidth > 0)
-            {
-                double target = tab.HorizontalOffset + Math.Sign(delta) * 48;
-                if (target < 0) target = 0;
-                if (target > tab.ScrollableWidth) target = tab.ScrollableWidth;
-                tab.ScrollToHorizontalOffset(target);
-                handled = true;
-            }
+            // Positive means the wheel went right, and Windows has already applied whatever scrolling
+            // direction the person set, so following the sign as given is what makes a swipe land the
+            // way their system says it should.
+            int delta = (short)((wParam.ToInt64() >> 16) & 0xFFFF);
+            if (ScrollStripBy(StripUnderCursor(), StepOf(delta))) handled = true;
             return IntPtr.Zero;
         }
 
-        private static ScrollViewer FindTabScroller(DependencyObject d)
+        private static double StepOf(int wheelDelta) { return (wheelDelta / 120.0) * WheelStep; }
+
+        /// <summary>The tab strip the pointer is inside, or null when it is over anything else.</summary>
+        private static ScrollViewer StripUnderCursor()
         {
+            var d = System.Windows.Input.Mouse.DirectlyOver as DependencyObject;
             while (d != null)
             {
                 var sv = d as ScrollViewer;
@@ -275,6 +496,19 @@ namespace QuickPane.UI
                 d = parent;
             }
             return null;
+        }
+
+        /// <summary>Move a strip by a pixel amount. False when it has nowhere left to go that way, so
+        /// the event carries on to whatever would have handled it otherwise.</summary>
+        private static bool ScrollStripBy(ScrollViewer sv, double pixels)
+        {
+            if (sv == null || sv.ScrollableWidth <= 0) return false;
+            double target = sv.HorizontalOffset + pixels;
+            if (target < 0) target = 0;
+            if (target > sv.ScrollableWidth) target = sv.ScrollableWidth;
+            if (Math.Abs(target - sv.HorizontalOffset) < 0.5) return false;
+            sv.ScrollToHorizontalOffset(target);
+            return true;
         }
 
         // ---- support + resize ----
@@ -357,13 +591,20 @@ namespace QuickPane.UI
     /// <summary>Shared UI helpers: section separators, headers, and expand/collapse animation.</summary>
     internal static class UiHelpers
     {
+        public const string SeparatorTag = "qp-separator";
+
+        /// <summary>Marks a header and the rows under it as one thing, so filtering never leaves a
+        /// heading standing over nothing.</summary>
+        public const string FilterBlockTag = "qp-block";
+
         public static Border MakeSeparator()
         {
             return new Border
             {
                 Height = 1,
                 Margin = new Thickness(8, 6, 8, 6),
-                Background = AppBrush("SeparatorColor")
+                Background = AppBrush("SeparatorColor"),
+                Tag = SeparatorTag   // a rule between rows means nothing once the rows are filtered out
             };
         }
 
@@ -390,7 +631,7 @@ namespace QuickPane.UI
                 Text = "", // Segoe MDL2 ChevronRight, rotates to point down when expanded
                 FontFamily = new FontFamily("Segoe MDL2 Assets"),
                 FontSize = 10,
-                Opacity = 0,
+                Opacity = 1,   // always shown, so a section reads as collapsible before it is hovered
                 Foreground = AppBrush("ChevronColor"),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -422,7 +663,6 @@ namespace QuickPane.UI
 
             grid.Margin = new Thickness(6, 6, 8, 4);
             grid.MouseEnter += (s, e) => glyph.Opacity = 1;
-            grid.MouseLeave += (s, e) => glyph.Opacity = 0;
             grid.Background = Brushes.Transparent;
             grid.Cursor = System.Windows.Input.Cursors.Hand;
 

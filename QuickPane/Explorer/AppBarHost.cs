@@ -123,7 +123,7 @@ namespace QuickPane.Explorer
             if (c == "CabinetWClass" || c == "ExploreWClass") _lastExplorer = hwnd;
         }
 
-        private static int WidthPx()
+        private int WidthPx()
         {
             int w = App.Settings != null ? App.Settings.Current.SidebarWidthPx : 220;
             if (w < 160) w = 160; if (w > 400) w = 400;
@@ -164,14 +164,13 @@ namespace QuickPane.Explorer
             }
         }
 
-        private static bool GetWorkArea(out NM.RECT rc)
+        /// <summary>Work area of the monitor the dock is on. The primary screen's work area describes
+        /// the wrong rectangle entirely on a second display, which put the dock on the wrong screen and
+        /// gave it the wrong height.</summary>
+        private bool GetWorkArea(out NM.RECT rc)
         {
-            rc = new NM.RECT();
-            if (NM.SystemParametersInfo(NM.SPI_GETWORKAREA, 0, ref rc, 0)) return true;
-            rc.Left = 0; rc.Top = 0;
-            rc.Right = NM.GetSystemMetrics(NM.SM_CXSCREEN);
-            rc.Bottom = NM.GetSystemMetrics(NM.SM_CYSCREEN);
-            return true;
+            rc = NM.WorkAreaFor(_handle);
+            return rc.Width > 0 && rc.Height > 0;
         }
 
         // Position the auto-hide dock on the LEFT screen edge, full work-area height. Collapsed it is a
@@ -199,7 +198,7 @@ namespace QuickPane.Explorer
         {
             if (_handle == IntPtr.Zero) return;
             int width = WidthPx();
-            int screenH = NM.GetSystemMetrics(NM.SM_CYSCREEN);
+            NM.RECT wa; GetWorkArea(out wa);
 
             var abd = new NM.APPBARDATA
             {
@@ -207,7 +206,9 @@ namespace QuickPane.Explorer
                 hWnd = _handle,
                 uEdge = NM.ABE_LEFT
             };
-            abd.rc.Left = 0; abd.rc.Top = 0; abd.rc.Right = width; abd.rc.Bottom = screenH;
+            // Reserve against the monitor the dock occupies, so a second screen gets a strip of the
+            // right height in the right place instead of the primary screen's geometry.
+            abd.rc.Left = wa.Left; abd.rc.Top = wa.Top; abd.rc.Right = wa.Left + width; abd.rc.Bottom = wa.Bottom;
             NM.SHAppBarMessage(NM.ABM_QUERYPOS, ref abd);
             abd.rc.Right = abd.rc.Left + width;
             NM.SHAppBarMessage(NM.ABM_SETPOS, ref abd);
@@ -302,6 +303,7 @@ namespace QuickPane.Explorer
             try { _pinTimer?.Stop(); } catch { }
             try { _foregroundHook?.Dispose(); } catch { }
             RemoveAppBar();
+            try { _sidebar?.Detach(); } catch (Exception ex) { Log.Error("sidebar detach", ex); }
             try { _window?.Close(); } catch (Exception ex) { Log.Error("appbar window close", ex); }
             _window = null;
             _sidebar = null;

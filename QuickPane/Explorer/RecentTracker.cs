@@ -39,8 +39,31 @@ namespace QuickPane.Explorer
         private void OnEvt(uint evt, IntPtr hwnd, int idObject, int idChild, uint thread)
         {
             if (idObject != NM.OBJID_WINDOW || idChild != 0 || hwnd == IntPtr.Zero) return;
+            NoteApp(hwnd);
             Track(hwnd);
         }
+
+        // Which program was just switched to. Reading the path is a pair of handle calls, so it happens
+        // inline; deciding whether it belongs on the list, and writing the file, happens on the worker.
+        private void NoteApp(IntPtr hwnd)
+        {
+            if (App.RecentApps == null) return;
+            if (hwnd == _lastAppHwnd) return;
+            _lastAppHwnd = hwnd;
+            try
+            {
+                var exe = NM.ExePathOf(hwnd);
+                if (string.IsNullOrEmpty(exe)) return;
+                WorkQueue.Post(() =>
+                {
+                    try { App.RecentApps.RecordRunning(exe); }
+                    catch (Exception ex) { Log.Error("note the app in front", ex); }
+                });
+            }
+            catch (Exception ex) { Log.Error("read the app in front", ex); }
+        }
+
+        private IntPtr _lastAppHwnd;
 
         private void Track(IntPtr hwnd)
         {

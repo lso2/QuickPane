@@ -47,21 +47,34 @@ namespace QuickPane.UI
                 Left = (pt.X / scale) - 20;
                 Top = (pt.Y / scale) - 20;
             }
-            ClampToScreen();
             Show();
+            ClampToScreen();   // needs the handle, so it runs once the window exists
             Activate();
             Topmost = true;
         }
 
+        /// <summary>Keep the picker on the screen it was opened on. Comparing its position against the
+        /// primary work area's width and height treats every monitor as starting at the origin, which
+        /// dragged the picker back onto the first display. Working in device pixels against the window's
+        /// own monitor avoids that and the DPI conversion with it.</summary>
         private void ClampToScreen()
         {
-            double w = 300, h = 300;
-            double sw = SystemParameters.WorkArea.Width;
-            double sh = SystemParameters.WorkArea.Height;
-            if (Left + w > sw) Left = Math.Max(0, sw - w);
-            if (Top + h > sh) Top = Math.Max(0, sh - h);
-            if (Left < 0) Left = 0;
-            if (Top < 0) Top = 0;
+            var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+            if (hwnd == IntPtr.Zero) return;
+
+            NM.RECT r;
+            if (!NM.GetWindowRect(hwnd, out r)) return;
+            var wa = NM.WorkAreaFor(hwnd);
+
+            int left = r.Left, top = r.Top, w = r.Width, h = r.Height;
+            if (left + w > wa.Right) left = wa.Right - w;
+            if (top + h > wa.Bottom) top = wa.Bottom - h;
+            if (left < wa.Left) left = wa.Left;
+            if (top < wa.Top) top = wa.Top;
+            if (left == r.Left && top == r.Top) return;
+
+            NM.SetWindowPos(hwnd, IntPtr.Zero, left, top, 0, 0,
+                NM.SWP_NOSIZE | NM.SWP_NOZORDER | NM.SWP_NOACTIVATE);
         }
 
         private void BuildList()

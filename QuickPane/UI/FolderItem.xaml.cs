@@ -28,10 +28,27 @@ namespace QuickPane.UI
             MouseEnter += (s, e) => Root.Background = Brush("ItemHoverBackground");
             MouseLeave += (s, e) => Root.Background = Brushes.Transparent;
             MouseLeftButtonUp += OnLeftClick;
+
+            // Reachable by keyboard: arrows move between rows and Enter opens the one in focus. Rows are
+            // only in the tab order when keyboard navigation is switched on, so nothing changes for
+            // anyone who leaves it off.
+            Focusable = true;
+            KeyDown += (s, e) =>
+            {
+                if (e.Key != System.Windows.Input.Key.Enter && e.Key != System.Windows.Input.Key.Space) return;
+                var h = Clicked;
+                if (h != null) { h(); e.Handled = true; }
+            };
+            GotKeyboardFocus += (s, e) => Root.Background = UiHelpers.AppBrush("ItemHoverBackground");
+            LostKeyboardFocus += (s, e) => Root.Background = System.Windows.Media.Brushes.Transparent;
         }
+
+        /// <summary>The text this row shows, which is what the pane's search box filters on.</summary>
+        public string LabelText { get; private set; }
 
         public void Bind(string display, string targetPath, bool exists, bool isFile = false)
         {
+            LabelText = display;
             DisplayName = display;
             TargetPath = targetPath;
             IsBroken = !exists;
@@ -79,6 +96,56 @@ namespace QuickPane.UI
         private static readonly HashSet<string> Pending = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private const int MaxCache = 600;
         private static ImageSource _genericFolder;
+
+        /// <summary>
+        /// The icon Windows shows for a program. Falls back to the file's own icon when the Start menu
+        /// has nothing to say about it, which is every program whose first icon is the right one.
+        /// </summary>
+        public static ImageSource GetAppIcon(string exePath)
+        {
+            try
+            {
+                var pick = AppShortcuts.IconFor(exePath);
+                if (pick != null)
+                {
+                    string key = "a:" + pick.File + "," + pick.Index;
+                    lock (Gate)
+                    {
+                        ImageSource cached;
+                        if (Cache.TryGetValue(key, out cached)) return cached;
+                    }
+                    var img = ExtractAt(pick.File, pick.Index);
+                    if (img != null) { Put(key, img); return img; }
+                }
+            }
+            catch (Exception ex) { Log.Error("app icon for '" + exePath + "'", ex); }
+
+            return GetIcon(exePath, true, true);
+        }
+
+        /// <summary>One numbered icon out of a file.</summary>
+        private static ImageSource ExtractAt(string file, int index)
+        {
+            var large = new IntPtr[1];
+            var small = new IntPtr[1];
+            int got = NM.ExtractIconEx(file, index, large, small, 1);
+            if (got <= 0) return null;
+            try
+            {
+                IntPtr h = small[0] != IntPtr.Zero ? small[0] : large[0];
+                if (h == IntPtr.Zero) return null;
+                var img = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
+                    h, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+                img.Freeze();
+                return img;
+            }
+            catch (Exception ex) { Log.Error("read icon " + index + " of '" + file + "'", ex); return null; }
+            finally
+            {
+                if (large[0] != IntPtr.Zero) NM.DestroyIcon(large[0]);
+                if (small[0] != IntPtr.Zero) NM.DestroyIcon(small[0]);
+            }
+        }
 
         public static ImageSource GetIcon(string path, bool exists, bool isFile)
         {

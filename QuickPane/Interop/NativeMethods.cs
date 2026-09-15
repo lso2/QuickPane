@@ -120,6 +120,18 @@ namespace QuickPane.Interop
             return sb.ToString();
         }
 
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern int GetWindowTextW(IntPtr hWnd, StringBuilder text, int count);
+
+        /// <summary>A window's title text, used to recognize our own hosted pane, whose name is set
+        /// through HwndSourceParameters while its class is one WPF generates.</summary>
+        public static string TextOf(IntPtr hWnd)
+        {
+            var sb = new StringBuilder(256);
+            GetWindowTextW(hWnd, sb, sb.Capacity);
+            return sb.ToString();
+        }
+
         // ---- geometry ----
         [DllImport("user32.dll")]
         public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
@@ -157,6 +169,11 @@ namespace QuickPane.Interop
         public const uint SHGFI_PIDL = 0x000000008;
         public const uint FILE_ATTRIBUTE_DIRECTORY = 0x00000010;
 
+        /// <summary>Pull one numbered icon out of a file, for a program whose recognizable icon is not
+        /// the first one inside it.</summary>
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        public static extern int ExtractIconEx(string file, int index, IntPtr[] large, IntPtr[] small, int count);
+
         [DllImport("shell32.dll", EntryPoint = "SHGetFileInfo")]
         public static extern IntPtr SHGetFileInfoPidl(IntPtr pidl, uint dwFileAttributes,
             ref SHFILEINFO psfi, uint cbSizeFileInfo, uint uFlags);
@@ -167,6 +184,7 @@ namespace QuickPane.Interop
         [DllImport("shell32.dll", EntryPoint = "ILFree")]
         public static extern void ILFreePidl(IntPtr pidl);
 
+        public const int CSIDL_DRIVES  = 0x0011;   // This PC
         public const int CSIDL_NETWORK = 0x0012;
 
         // ---- shell file operations (move/copy with native progress, undo, conflict UI) ----
@@ -188,7 +206,11 @@ namespace QuickPane.Interop
 
         public const uint FO_MOVE = 0x0001;
         public const uint FO_COPY = 0x0002;
+        public const uint FO_DELETE = 0x0003;
+        public const ushort FOF_NOCONFIRMATION = 0x0010;
         public const ushort FOF_ALLOWUNDO = 0x0040;
+        public const ushort FOF_NOERRORUI = 0x0400;
+        public const ushort FOF_SILENT = 0x0004;
         public const ushort FOF_NOCONFIRMMKDIR = 0x0200;
 
         // ---- parenting / positioning ----
@@ -214,6 +236,24 @@ namespace QuickPane.Interop
 
         [DllImport("user32.dll")]
         public static extern bool IsIconic(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern bool IsZoomed(IntPtr hWnd);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+        [DllImport("user32.dll")]
+        public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr SetFocus(IntPtr hWnd);
+
+        [DllImport("kernel32.dll")]
+        public static extern uint GetCurrentThreadId();
 
         [DllImport("user32.dll")]
         public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
@@ -301,9 +341,46 @@ namespace QuickPane.Interop
         public const uint EVENT_OBJECT_CREATE = 0x8000;
         public const uint EVENT_OBJECT_DESTROY = 0x8001;
         public const uint EVENT_OBJECT_SHOW = 0x8002;
+        public const uint EVENT_OBJECT_HIDE = 0x8003;
         public const uint EVENT_OBJECT_LOCATIONCHANGE = 0x800B;
         public const uint EVENT_OBJECT_NAMECHANGE = 0x800C;
         public const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+
+        // ---- which program owns a window ----
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool CloseHandle(IntPtr h);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool QueryFullProcessImageName(IntPtr proc, uint flags,
+            System.Text.StringBuilder name, ref int size);
+
+        /// <summary>Enough rights to read a program's path, and no more, so this answers for elevated
+        /// programs too instead of failing the way a full-information open would.</summary>
+        public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+        /// <summary>The full path of the program that owns a window, or null.</summary>
+        public static string ExePathOf(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return null;
+            uint pid;
+            GetWindowThreadProcessId(hwnd, out pid);
+            if (pid == 0) return null;
+
+            IntPtr h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (h == IntPtr.Zero) return null;
+            try
+            {
+                int size = 1024;
+                var sb = new System.Text.StringBuilder(size);
+                return QueryFullProcessImageName(h, 0, sb, ref size) ? sb.ToString() : null;
+            }
+            finally { CloseHandle(h); }
+        }
         public const uint EVENT_OBJECT_REORDER = 0x8004;
 
         public const uint WINEVENT_OUTOFCONTEXT = 0x0000;
@@ -355,5 +432,78 @@ namespace QuickPane.Interop
 
         public const int ABN_POSCHANGED = 0x1;
         public const int ABN_FULLSCREENAPP = 0x2;
+
+        // ---- monitors and scaling -------------------------------------------
+        // Placement has to be judged against the monitor a window is actually on. The primary screen's
+        // metrics say nothing about a window on a second display, and a monitor left of the primary one
+        // has negative coordinates that a clamp to zero throws away.
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MONITORINFO
+        {
+            public int cbSize;
+            public RECT rcMonitor;
+            public RECT rcWork;
+            public uint dwFlags;
+        }
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+        public const uint MONITOR_DEFAULTTONEAREST = 0x2;
+
+        [DllImport("user32.dll")]
+        private static extern uint GetDpiForWindow(IntPtr hwnd);
+
+        [DllImport("gdi32.dll")]
+        private static extern int GetDeviceCaps(IntPtr hdc, int nIndex);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetDC(IntPtr hwnd);
+
+        [DllImport("user32.dll")]
+        private static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
+
+        private const int LOGPIXELSX = 88;
+
+        /// <summary>Work area of the monitor holding hwnd, falling back to the primary screen. Work area
+        /// rather than full bounds, so a placement never lands under the taskbar.</summary>
+        public static RECT WorkAreaFor(IntPtr hwnd)
+        {
+            var mi = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
+            IntPtr mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            if (mon != IntPtr.Zero && GetMonitorInfo(mon, ref mi)) return mi.rcWork;
+
+            RECT wa = new RECT();
+            if (SystemParametersInfo(SPI_GETWORKAREA, 0, ref wa, 0)) return wa;
+            wa.Left = 0; wa.Top = 0;
+            wa.Right = GetSystemMetrics(SM_CXSCREEN);
+            wa.Bottom = GetSystemMetrics(SM_CYSCREEN);
+            return wa;
+        }
+
+        /// <summary>Pixels per inch of the monitor holding hwnd. GetDpiForWindow needs Windows 10, so
+        /// older builds fall back to the desktop DC, which reports the system DPI.</summary>
+        public static int DpiForWindow(IntPtr hwnd)
+        {
+            try
+            {
+                uint dpi = GetDpiForWindow(hwnd);
+                if (dpi >= 48 && dpi <= 960) return (int)dpi;
+            }
+            catch { }
+            IntPtr dc = GetDC(IntPtr.Zero);
+            if (dc == IntPtr.Zero) return 96;
+            try
+            {
+                int dpi = GetDeviceCaps(dc, LOGPIXELSX);
+                return dpi >= 48 && dpi <= 960 ? dpi : 96;
+            }
+            finally { ReleaseDC(IntPtr.Zero, dc); }
+        }
+
     }
 }

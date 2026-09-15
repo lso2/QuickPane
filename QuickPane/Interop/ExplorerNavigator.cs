@@ -29,6 +29,36 @@ namespace QuickPane.Interop
             WorkQueue.Post(() => Navigate(topLevelHwnd, path));
         }
 
+        // 0x800700AA is ERROR_BUSY surfaced through COM: the window is mid-operation rather than wrong
+        // or gone, so the call is worth making again once the shell has had a moment.
+        private const int HResultResourceInUse = unchecked((int)0x800700AA);
+
+        /// <summary>Drive Navigate2, retrying once when the shell reports the window busy. Giving up on
+        /// a busy window left the click doing nothing at all.</summary>
+        private static bool Navigate2WithRetry(object w, string path)
+        {
+            for (int attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    Call(w, "Navigate2", path);
+                    return true;
+                }
+                catch (Exception ex) when (attempt == 0 && IsBusy(ex))
+                {
+                    System.Threading.Thread.Sleep(250);
+                }
+            }
+        }
+
+        private static bool IsBusy(Exception ex)
+        {
+            for (var e = ex; e != null; e = e.InnerException)
+                if (System.Runtime.InteropServices.Marshal.GetHRForException(e) == HResultResourceInUse)
+                    return true;
+            return false;
+        }
+
         /// <summary>Navigate the Explorer window identified by topLevelHwnd to path, in place.</summary>
         public static bool Navigate(IntPtr topLevelHwnd, string path)
         {
@@ -59,8 +89,7 @@ namespace QuickPane.Interop
                         if (w == null) continue;
                         if (HwndOf(w) != target) continue;
 
-                        Call(w, "Navigate2", path);
-                        return true;
+                        if (Navigate2WithRetry(w, path)) return true;
                     }
                     catch (Exception ex)
                     {

@@ -4,7 +4,7 @@
 ![.NET Framework](https://img.shields.io/badge/.NET%20Framework-4.8-512BD4.svg?logo=dotnet&logoColor=white)
 ![C#](https://img.shields.io/badge/C%23-7.3-239120.svg?logo=csharp&logoColor=white)
 ![UI](https://img.shields.io/badge/UI-WPF-1f6feb.svg)
-![Version](https://img.shields.io/badge/Version-3.7.0-success.svg)
+![Version](https://img.shields.io/badge/Version-3.10.0-success.svg)
 ![License](https://img.shields.io/badge/License-MIT-orange.svg)
 
 A folder sidebar for Windows File Explorer. QuickPane embeds a pinned-folders pane inside every Explorer window, so your groups, recent locations, drives, network shares, and WSL distros travel with the window you are already using. Pin it inside the window, float it beside the window, or run it as a slim screen-edge dock. Everything runs locally as a single tray app, no code is ever injected into Explorer, and all data stays in plain files under your user profile.
@@ -22,6 +22,9 @@ QuickPane puts your folders one click away inside Explorer itself, with:
 - 🪟 **Stays at the window's z-level**: the beside pane is an owned window of its Explorer window, never forced above everything else
 - 📌 **Desktop dock**: an optional screen-edge AppBar with auto-hide and all-virtual-desktops pinning
 - 💾 **Open and Save dialog support**: the pane attaches to file dialogs and navigates them too
+- 🔎 **Search box**: filters every folder in the pane as you type
+- 🚀 **Recent Apps**: the programs you have been using, where a row opens its app and browser rows open out into their profiles
+- 🎯 **Per-app folders**: set a folder as an app's starting point and its Save and Open dialogs land there
 - 👤 **Profiles**: independent workspaces, each with its own groups, recents count, and width
 - 🎨 **Native feel**: dark and light themes that blend into the Windows shell
 - 🔒 **Local storage**: groups are folders of shortcuts and settings are a JSON file you can back up
@@ -51,10 +54,13 @@ Folders live in groups, and a group can hold several tabs.
 
 The pane is a stack of sections you can show, hide, reorder, and rename:
 
+- **Search box**: filters the rows already on screen as you type, so it stays instant however many groups are pinned
+- **App Folders**: inside a file dialog, the folder you set as that app's starting point
 - **Groups**: your pinned folder groups
 - **Recent**: folders browsed directly in Explorer, captured through window activation, title changes, and a light periodic check, with a location-URL fallback when the shell returns nothing, and a configurable count from 5 to 50
-- **This PC**: drives that expand in place, with folder subtrees that enumerate lazily like the native Explorer tree
+- **This PC**: a This PC row that opens the folder and expands to the drives, each drive expanding into subtrees that enumerate lazily like the native Explorer tree
 - **Network** and **Linux (WSL)**: each its own section with a proper icon and a visibility toggle
+- **Recent Apps**: the programs you have been using, each opening its app
 
 ![The pane showing This PC, Network, and a Linux (WSL) distro browsed like a local drive](screens/quickpane-demo-2.jpg)
 
@@ -73,6 +79,31 @@ An optional AppBar at the left screen edge, independent of the window pane.
 ### Open and Save dialog support
 
 QuickPane attaches to file Open and Save common dialogs and honors the same pane mode as real windows. Inside mode shifts every one of the dialog's controls and widens the dialog so nothing overlaps the pane, and beside mode floats a pane against the dialog's edge. Both the classic dialog and the modern common item dialog navigate to the clicked folder.
+
+### Search
+
+A box at the top of the pane filters every row beneath it as you type. Because it narrows what is already on screen rather than searching the disk, it stays instant however many groups are pinned.
+
+- A heading disappears along with the rows beneath it
+- A folder stays visible when something inside it matches
+- Escape clears the box
+
+### Recent Apps
+
+The programs you have been using, where a row opens its app rather than a folder. An app reaches the list either by being brought to the front or by having its Save or Open dialog used, and a setting chooses which of the two count.
+
+- Browser rows open out into that browser's profiles, which are read from the browser's own profile list
+- Chromium-family browsers and Firefox are both read
+- Programs carry the name and icon Windows shows for them, which tells side-by-side installs such as Chrome and Chrome Canary apart
+- The folder an app's dialog was last sent to is on the row's right-click menu
+
+### Per-app folders
+
+Right-click a folder while an app's Save or Open dialog is open and choose "Always start {app} here". That app's dialogs then offer the folder from an App Folders section at the top of the pane, which appears only inside a dialog.
+
+### Keyboard navigation
+
+An optional shortcut moves focus into the pane, where the arrow keys move between folders and Enter opens one. It stays off until it is switched on under Settings, Hotkeys, so no key combination is taken from the rest of the system by default.
 
 ### Profiles
 
@@ -163,7 +194,9 @@ QuickPane sits alongside Windows' built-in navigation pane rather than replacing
 ### Settings
 
 - Open Settings from the tray icon or the gear in the pane
-- Adjust mode, theme, pane width, recents count, section visibility and order, the desktop dock and its options, the profile tab row, and profiles
+- Grouped into tabs: Groups, Pane, Hotkeys, Connections and Backup
+- Adjust mode, theme, pane width, recents count, section visibility and order, the desktop dock and its options, the profile tab row, which apps Recent Apps lists, the keyboard shortcut, and profiles
+- A footer shows the running version and offers a download when a newer release is published
 - Changes apply live
 
 ## Settings and data

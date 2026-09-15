@@ -21,13 +21,16 @@ namespace QuickPane.Explorer
     {
         private readonly IntPtr _dlg;
         private readonly Action<string> _navigate;
+        private readonly string _hostApp;
         private readonly Dictionary<IntPtr, NM.RECT> _orig = new Dictionary<IntPtr, NM.RECT>();
         private HwndSource _host;
         private SidebarControl _sidebar;
         private int _width;
         private int _origWinW, _origWinH;
+        private int _origWinX, _origWinY;
+        private bool _moved;       // the dialog was nudged to keep the pane on screen
         private bool _attached, _disposed;
-        private bool _applying, _disabled, _shiftedOnce;
+        private bool _applying, _shiftedOnce;
         private int _relayoutCount, _windowStart;
         private int _lastW, _lastH;      // dialog outer size at the previous relayout pass
         private int _attachTick;         // settle window for controls that are built lazily
@@ -39,10 +42,16 @@ namespace QuickPane.Explorer
 
         public bool Attached { get { return _attached; } }
 
-        public DialogInsidePane(IntPtr dlg, Action<string> navigate)
+        /// <summary>The hosted pane window, for moving keyboard focus into it.</summary>
+        public IntPtr PaneHandle { get { return _host != null ? _host.Handle : IntPtr.Zero; } }
+
+        public SidebarControl Sidebar { get { return _sidebar; } }
+
+        public DialogInsidePane(IntPtr dlg, Action<string> navigate, string hostApp)
         {
             _dlg = dlg;
             _navigate = navigate;
+            _hostApp = hostApp;
             _width = ClampWidth(App.Settings != null ? App.Settings.Current.SidebarWidthPx : 220);
         }
 
@@ -54,6 +63,25 @@ namespace QuickPane.Explorer
             NM.RECT win;
             if (!NM.GetWindowRect(_dlg, out win)) return false;
             _origWinW = win.Width; _origWinH = win.Height;
+            _origWinX = win.Left; _origWinY = win.Top;
+
+            // The pane occupies a strip at the dialog's left, so it is only reachable when the dialog
+            // sits inside the monitor's work area. A dialog opened hard against the left edge left that
+            // strip off screen, which reads as the pane simply never appearing.
+            var wa = NM.WorkAreaFor(_dlg);
+            if (wa.Width <= 0 || wa.Height <= 0) return false;
+            int room = wa.Width - _origWinW;
+            if (_width > room) _width = room;
+            if (_width > wa.Width / 3) _width = wa.Width / 3;
+            if (_width < 160)
+            {
+                // Widening would push the dialog's own buttons off the screen. The beside follower moves
+                // the dialog aside instead of reshaping it, so hand it over.
+                Failed = true;
+                Log.Info("inside pane does not fit beside the " + QuickPane.Interop.DialogNavigator.Owner(_dlg) +
+                    " dialog " + _dlg.ToString("X") + " on a " + wa.Width + "px work area, so it goes beside.");
+                return false;
+            }
 
             CaptureChildren();
             if (_orig.Count == 0) return false; // controls not built yet; caller retries
@@ -68,9 +96,19 @@ namespace QuickPane.Explorer
             {
                 // Widen the dialog by the pane width (grow the right edge), then push every child right so
                 // the left strip is free. The full-width file view ends up filling the wider area exactly.
-                NM.SetWindowPos(_dlg, IntPtr.Zero, 0, 0, _origWinW + _width, _origWinH,
-                    NM.SWP_NOMOVE | NM.SWP_NOZORDER | NM.SWP_NOACTIVATE);
+                int newW = _origWinW + _width;
+                int left = win.Left, top = win.Top;
+                if (left + newW > wa.Right) left = wa.Right - newW;
+                if (left < wa.Left) left = wa.Left;
+                if (top + _origWinH > wa.Bottom) top = wa.Bottom - _origWinH;
+                if (top < wa.Top) top = wa.Top;
+                _moved = left != win.Left || top != win.Top;
+
+                NM.SetWindowPos(_dlg, IntPtr.Zero, left, top, newW, _origWinH,
+                    NM.SWP_NOZORDER | NM.SWP_NOACTIVATE);
+
                 ShiftChildren();
+                Repaint();
 
                 NM.RECT client; NM.GetClientRect(_dlg, out client);
                 var p = new HwndSourceParameters("QuickPaneSidebar")
@@ -81,8 +119,18 @@ namespace QuickPane.Explorer
                     PositionX = 0, PositionY = 0, Width = _width, Height = client.Height
                 };
                 _sidebar = new SidebarControl();
+                _sidebar.HostApp = _hostApp;   // set before Attach, which is what builds the sections
                 _sidebar.Attach(_navigate);
                 _host = new HwndSource(p);
+                // HwndSource swallows a failed CreateWindowEx and disposes itself, so the object can come
+                // back already dead. Assigning RootVisual to that throws, which is every caught exception
+                // this method has ever logged.
+                if (_host.IsDisposed || _host.Handle == IntPtr.Zero)
+                {
+                    Log.Info("dialog inside pane host window was not created for " + _dlg.ToString("X") + "; retrying later.");
+                    Restore();
+                    return false;
+                }
                 _host.RootVisual = _sidebar;
                 bool dark = App.Theme != null && App.Theme.IsDark;
                 _host.CompositionTarget.BackgroundColor = dark ? Color.FromRgb(0x20, 0x20, 0x20) : Color.FromRgb(0xF3, 0xF3, 0xF3);
@@ -107,13 +155,36 @@ namespace QuickPane.Explorer
             }
         }
 
+        /// <summary>True for the pane's own host window. HwndSourceParameters takes a window NAME, not a
+        /// class name, so the host's class is WPF's generated HwndWrapper[...] and comparing the class
+        /// against "QuickPaneSidebar" never matched. The pane was therefore captured as one of the
+        /// dialog's controls and shifted right along with them every time the layout was reapplied.</summary>
+        private bool IsOurPane(IntPtr h)
+        {
+            if (_host != null && h == _host.Handle) return true;
+            return NM.TextOf(h) == "QuickPaneSidebar";
+        }
+
+        /// <summary>Ask the dialog to repaint itself and all its children.
+        ///
+        /// Moving another process's controls with SetWindowPos does not invalidate the area they came
+        /// from, so whatever was drawn there stays on screen until something else paints over it. After
+        /// a resize that leaves pieces of the pane stranded across the dialog's file list, which is the
+        /// ghost text that appears over the rows.</summary>
+        private void Repaint()
+        {
+            if (!NM.IsWindow(_dlg)) return;
+            NM.RedrawWindow(_dlg, IntPtr.Zero, IntPtr.Zero,
+                NM.RDW_INVALIDATE | NM.RDW_ERASE | NM.RDW_ALLCHILDREN | NM.RDW_UPDATENOW);
+        }
+
         private void CaptureChildren()
         {
             _orig.Clear();
             NM.EnumChildWindows(_dlg, (h, l) =>
             {
                 if (NM.GetParent(h) != _dlg) return true;       // direct children only
-                if (NM.ClassOf(h) == "QuickPaneSidebar") return true;
+                if (IsOurPane(h)) return true;
                 NM.RECT r;
                 if (NM.GetWindowRect(h, out r))
                 {
@@ -132,7 +203,7 @@ namespace QuickPane.Explorer
             NM.EnumChildWindows(_dlg, (h, l) =>
             {
                 if (NM.GetParent(h) != _dlg) return true;
-                if (_orig.ContainsKey(h) || NM.ClassOf(h) == "QuickPaneSidebar") return true;
+                if (_orig.ContainsKey(h) || IsOurPane(h)) return true;
                 NM.RECT r;
                 if (NM.GetWindowRect(h, out r))
                 {
@@ -177,6 +248,7 @@ namespace QuickPane.Explorer
 
             NM.RECT wr;
             if (!NM.GetWindowRect(_dlg, out wr)) return;
+
             bool sizeChanged = wr.Width != _lastW || wr.Height != _lastH;
             _lastW = wr.Width; _lastH = wr.Height;
 
@@ -190,14 +262,6 @@ namespace QuickPane.Explorer
             // Pure moves and sweep ticks get at most one full pass per 1.2 s as a safety net.
             if (!sizeChanged && !settling && now - _lastFullPass < 1200) return;
             _lastFullPass = now;
-
-            // A real size change is new information, so a backed-off dialog gets another chance.
-            if (_disabled)
-            {
-                if (!sizeChanged) return;
-                _disabled = false;
-                _relayoutCount = 0;
-            }
 
             // Detect the dialog re-laying out the controls we shifted. Photoshop's Save rebuilds itself on
             // navigation and moves its controls back over our pane (it does not change the window width).
@@ -216,23 +280,37 @@ namespace QuickPane.Explorer
                     total++;
                     if (Math.Abs(pt.X - (kv.Value.Left + _width)) > 3) off++; // not at the shifted target
                 }
-                bool widthReset = wr.Width < _origWinW + _width - 10;
-                if ((total > 0 && off > total / 2) || widthReset)
+                // Any width other than the one set at attach means the dialog is no longer the size the
+                // captured positions were recorded against, whether the dialog reset it or the user
+                // dragged the corner. Those positions then describe nothing, and forcing the controls
+                // back to them is what drew the buttons twice and left the bottom row misplaced until
+                // the dialog was resized again. Only a narrower dialog used to be caught here.
+                bool widthOff = Math.Abs(wr.Width - (_origWinW + _width)) > 4;
+                if ((total > 0 && off > total / 2) || widthOff)
                 {
+                    // Give up on the first pass and hand the dialog to the beside follower, which never
+                    // touches its controls. Retrying holds the dialog in a broken state for as long as
+                    // the fight lasts; the follower costs a pane position and nothing else.
                     Failed = true;
                     Restore();
                     return;
                 }
             }
 
-            // Back off if a dialog keeps fighting the layout, so a stubborn dialog can never loop forever.
+            // A dialog that keeps putting its controls back owns its own layout, and no number of further
+            // passes will change that. Pausing maintenance here left the pane sitting inside the dialog
+            // while the dialog's content returned to where it wanted it, so the pane covered the file
+            // list's first column and the controls beneath it. Hand it over instead, which is the same
+            // outcome the position test above reaches for dialogs that move their controls back in one
+            // go rather than by oscillating.
             if (now - _windowStart > 1500) { _windowStart = now; _relayoutCount = 0; }
             if (++_relayoutCount > 12)
             {
-                _disabled = true;
+                Failed = true;
+                Restore();
                 Log.Event("glitch", "the " + QuickPane.Interop.DialogNavigator.Owner(_dlg) + " dialog " +
                     _dlg.ToString("X") + " moved its controls back " + _relayoutCount +
-                    " times in under 1.5 s, so pane maintenance for it is paused until the dialog is resized.");
+                    " times in under 1.5 s, so it was handed to the beside follower.");
                 return;
             }
 
@@ -244,6 +322,8 @@ namespace QuickPane.Explorer
             if (NM.GetClientRect(_dlg, out client))
                 NM.SetWindowPos(_host.Handle, NM.HWND_TOP, 0, 0, _width, client.Height,
                     NM.SWP_NOACTIVATE);
+
+            Repaint();
         }
 
         // Put every control back, return the dialog to its original size, and remove the pane host. Used
@@ -263,11 +343,13 @@ namespace QuickPane.Explorer
                         NM.SetWindowPos(kv.Key, IntPtr.Zero, r.Left, r.Top, r.Width, r.Height,
                             NM.SWP_NOZORDER | NM.SWP_NOACTIVATE);
                     }
-                    NM.SetWindowPos(_dlg, IntPtr.Zero, 0, 0, _origWinW, _origWinH,
-                        NM.SWP_NOMOVE | NM.SWP_NOZORDER | NM.SWP_NOACTIVATE);
+                    uint flags = NM.SWP_NOZORDER | NM.SWP_NOACTIVATE | (_moved ? 0 : NM.SWP_NOMOVE);
+                    NM.SetWindowPos(_dlg, IntPtr.Zero, _origWinX, _origWinY, _origWinW, _origWinH, flags);
                 }
             }
             catch (Exception ex) { Log.Error("DialogInsidePane restore", ex); }
+            try { Repaint(); } catch { }
+            try { _sidebar?.Detach(); } catch (Exception ex) { Log.Error("sidebar detach", ex); }
             try { _host?.Dispose(); } catch { }
             _host = null; _sidebar = null;
             Log.Activity("idle");

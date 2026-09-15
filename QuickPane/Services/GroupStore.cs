@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using QuickPane.Models;
+using NM = QuickPane.Interop.NativeMethods;
 
 namespace QuickPane.Services
 {
@@ -324,7 +326,7 @@ namespace QuickPane.Services
 
         public void DeleteGroup(PinnedGroup group)
         {
-            Try(() => { if (Directory.Exists(group.FolderPath)) Directory.Delete(group.FolderPath, true); });
+            Try(() => Recycle(group.FolderPath));
         }
 
         public void RenameGroup(PinnedGroup group, string newName)
@@ -679,8 +681,41 @@ namespace QuickPane.Services
         /// <summary>Delete a group folder and its contents.</summary>
         public static void DeleteGroupFolder(string folder)
         {
-            try { if (Directory.Exists(folder)) Directory.Delete(folder, true); }
-            catch (Exception ex) { Log.Error("DeleteGroupFolder failed", ex); }
+            Recycle(folder);
+        }
+
+        /// <summary>
+        /// Send a group's folder to the Recycle Bin rather than erasing it. Deleting a group takes every
+        /// pin in it with it, so the delete has to be one a person can take back from the desktop the way
+        /// they take back any other deleted folder.
+        /// </summary>
+        internal static void Recycle(string folder)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) return;
+
+                // SHFileOperation reads pFrom as a double-null-terminated list.
+                var from = folder + "\0\0";
+                IntPtr buffer = Marshal.StringToHGlobalUni(from);
+                try
+                {
+                    var op = new NM.SHFILEOPSTRUCT
+                    {
+                        wFunc = NM.FO_DELETE,
+                        pFrom = buffer,
+                        fFlags = (ushort)(NM.FOF_ALLOWUNDO | NM.FOF_NOCONFIRMATION | NM.FOF_NOERRORUI | NM.FOF_SILENT)
+                    };
+                    int rc = NM.SHFileOperation(ref op);
+                    if (rc != 0)
+                    {
+                        Log.Info("the shell refused to recycle \"" + folder + "\" (code " + rc + "); deleting it instead.");
+                        Directory.Delete(folder, true);
+                    }
+                }
+                finally { Marshal.FreeHGlobal(buffer); }
+            }
+            catch (Exception ex) { Log.Error("delete group folder '" + folder + "'", ex); }
         }
 
         /// <summary>Move a group folder into another profile's groups root (drag between columns).</summary>

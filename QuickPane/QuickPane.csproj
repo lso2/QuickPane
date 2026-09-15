@@ -86,6 +86,14 @@
     <Compile Include="Services\SettingsStore.cs" />
     <Compile Include="Services\GroupStore.cs" />
     <Compile Include="Services\RecentFoldersService.cs" />
+    <Compile Include="Services\RecentAppsService.cs" />
+    <Compile Include="Services\AppDefaultsService.cs" />
+    <Compile Include="Services\ActiveDialog.cs" />
+    <Compile Include="Services\PaneFilter.cs" />
+    <Compile Include="Services\HotkeyService.cs" />
+    <Compile Include="Services\UpdateService.cs" />
+    <Compile Include="Services\BrowserProfiles.cs" />
+    <Compile Include="Services\AppShortcuts.cs" />
     <Compile Include="Services\DriveService.cs" />
     <Compile Include="Services\ThemeService.cs" />
     <Compile Include="Services\ShellLink.cs" />
@@ -95,6 +103,9 @@
     <Compile Include="UI\TextPrompt.cs" />
     <Compile Include="UI\FolderTreeNode.cs" />
     <Compile Include="UI\ShellRootSection.cs" />
+    <Compile Include="UI\SearchSection.cs" />
+    <Compile Include="UI\RecentAppsSection.cs" />
+    <Compile Include="UI\AppDefaultsSection.cs" />
     <Compile Include="UI\SshSection.cs" />
     <Compile Include="UI\DropLineAdorner.cs" />
     <Compile Include="UI\DragGhostAdorner.cs" />
@@ -164,6 +175,7 @@
     </Compile>
   </ItemGroup>
   <ItemGroup>
+    <None Include="App.config" />
     <None Include="app.manifest" />
     <Resource Include="quickpane.ico" />
   </ItemGroup>

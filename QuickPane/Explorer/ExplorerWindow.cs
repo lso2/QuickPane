@@ -361,6 +361,7 @@ namespace QuickPane.Explorer
         private void SafeTeardownHost()
         {
             _hostHandle = IntPtr.Zero; // stop the enforcer touching this window first
+            try { _sidebar?.Detach(); } catch (Exception ex) { Log.Error("sidebar detach", ex); }
             try { _host?.Dispose(); } catch (Exception ex) { Log.Error("host dispose", ex); }
             _host = null;
             _sidebar = null;

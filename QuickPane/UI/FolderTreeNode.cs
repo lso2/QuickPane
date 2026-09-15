@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Windows;
@@ -34,23 +35,41 @@ namespace QuickPane.UI
         private readonly RotateTransform _chevron;
         private readonly TextBlock _chevGlyph;
         private readonly PinDropContext _pinContext;
+        private readonly Func<int, List<FrameworkElement>> _childProvider;
+        private readonly Action _onClick;
         private bool _loaded;
         private bool _expanded;
         private readonly bool _hasChildren;
 
         public Border Row { get { return _row; } }
 
+        /// <summary>The row's visible text, for the pane's filter.</summary>
+        public string LabelText { get; private set; }
+
+        /// <summary>The subtree beneath this row, for the pane's filter.</summary>
+        internal StackPanel ChildrenHost { get { return _children; } }
+
+        /// <param name="childProvider">Supplies this node's children instead of enumerating the path,
+        /// for a virtual root such as This PC whose children are drives rather than subfolders. A node
+        /// built this way is not a drop target, because its path names a shell folder and not a
+        /// directory anything can be copied into.</param>
+        /// <param name="onClick">Run instead of opening the path, for a row that stands for something
+        /// the pane does rather than somewhere it goes, such as a program to start.</param>
         public FolderTreeNode(string display, string path, bool exists, Action<string> navigate, int level,
-            bool isFile = false, ImageSource overrideIcon = null, PinDropContext pinContext = null)
+            bool isFile = false, ImageSource overrideIcon = null, PinDropContext pinContext = null,
+            Func<int, List<FrameworkElement>> childProvider = null, Action onClick = null)
         {
             _path = path;
             _level = level;
             _navigate = navigate;
             _pinContext = pinContext;
+            _childProvider = childProvider;
+            _onClick = onClick;
+            LabelText = display;
 
             // Optimistic: any existing folder gets an expander. Probing the directory here cost one
             // network roundtrip per row per rebuild; expanding an empty folder now just shows nothing.
-            _hasChildren = !isFile && exists;
+            _hasChildren = !isFile && (exists || childProvider != null);
             _chevron = new RotateTransform(0);
             _chevGlyph = new TextBlock
             {
@@ -62,7 +81,10 @@ namespace QuickPane.UI
                 HorizontalAlignment = HorizontalAlignment.Center,
                 RenderTransformOrigin = new Point(0.5, 0.5),
                 RenderTransform = _chevron,
-                Opacity = 0 // shown on row hover (and kept while expanded)
+                // A row whose children are handed to it always shows its caret, because there is no
+                // other sign that This PC or a browser opens out into something. A folder row keeps the
+                // hover behavior: every folder has a caret and showing them all is just noise.
+                Opacity = childProvider != null ? 1 : 0
             };
             var chevHit = new Border { Width = 18, Background = Brushes.Transparent, Cursor = Cursors.Hand, Child = _chevGlyph };
             chevHit.MouseLeftButtonUp += (s, e) => { e.Handled = true; Toggle(); };
@@ -100,12 +122,21 @@ namespace QuickPane.UI
                 Opacity = exists ? 1 : 0.5
             };
             _row.MouseEnter += (s, e) => { _row.Background = UiHelpers.AppBrush("ItemHoverBackground"); if (_hasChildren) _chevGlyph.Opacity = 1; };
-            _row.MouseLeave += (s, e) => { _row.Background = Brushes.Transparent; if (!_expanded) _chevGlyph.Opacity = 0; };
-            _row.MouseLeftButtonUp += (s, e) => { if (exists && !isFile) _navigate(path); else if (isFile) Open(path); };
-            if (level > 0) _row.ContextMenu = BasicMenu(path, isFile);
+            _row.MouseLeave += (s, e) =>
+            {
+                _row.Background = Brushes.Transparent;
+                if (!_expanded && _childProvider == null) _chevGlyph.Opacity = 0;
+            };
+            _row.MouseLeftButtonUp += (s, e) =>
+            {
+                if (_onClick != null) { _onClick(); return; }
+                if (exists && !isFile) _navigate(path);
+                else if (isFile) Open(path);
+            };
+            if (level > 0 && onClick == null) _row.ContextMenu = BasicMenu(path, isFile);
 
             // Items dropped from Explorer onto a real folder move/copy/link into it (or pin), below.
-            if (!isFile && exists)
+            if (!isFile && exists && childProvider == null && onClick == null)
             {
                 _row.AllowDrop = true;
                 _row.DragOver += OnFileDragOver;
@@ -122,7 +153,8 @@ namespace QuickPane.UI
             // switches. Gated on a confirmed-alive target: before the probe answers, expanding a
             // dead share here would enumerate it during construction. The rebuild that follows the
             // probe restores the subtree moments later.
-            if (_hasChildren && UiState.GetExpanded("tree:" + _path, false) && PathStatus.ConfirmedAlive(_path))
+            if (_hasChildren && UiState.GetExpanded("tree:" + _path, false)
+                && (_childProvider != null || PathStatus.ConfirmedAlive(_path)))
             {
                 _expanded = true;
                 LoadChildren();
@@ -247,9 +279,23 @@ namespace QuickPane.UI
         // Enumerate on the worker and add the rows on the UI thread, so expanding a slow or dead
         // folder can never freeze input. The expand animation opens to an unbounded MaxHeight, so
         // rows arriving a beat later simply appear.
+        /// <summary>Rebuild a supplied-children subtree in place, keeping the node expanded. Used when
+        /// the drive list changes under an open This PC node.</summary>
+        public void ReloadChildren()
+        {
+            if (_childProvider == null || !_loaded) return;
+            _children.Children.Clear();
+            foreach (var c in _childProvider(_level + 1)) _children.Children.Add(c);
+        }
+
         private void LoadChildren()
         {
             _loaded = true;
+            if (_childProvider != null)
+            {
+                foreach (var c in _childProvider(_level + 1)) _children.Children.Add(c);
+                return;
+            }
             var path = _path;
             var nav = _navigate;
             var level = _level;
@@ -267,6 +313,9 @@ namespace QuickPane.UI
             });
         }
 
+        /// <summary>Marks the menu entries rebuilt on every open, so they can be cleared first.</summary>
+        private const string AppDefaultTag = "qp-appdefault";
+
         private ContextMenu BasicMenu(string path, bool isFile)
         {
             var menu = new ContextMenu();
@@ -279,6 +328,28 @@ namespace QuickPane.UI
             {
                 menu.Items.Add(MakeItem("Open", () => _navigate(path)));
                 menu.Items.Add(MakeItem("Open in new window", () => ExplorerNavigator.OpenNewWindow(path)));
+
+                // Offered only in a pane hosted by a file dialog, because that is the only time there
+                // is an app for the folder to be the default of. Resolved when the menu opens rather
+                // than when the row is built, since a row is built before it joins the pane's tree.
+                var capturedPath = path;
+                menu.Opened += (s, e) =>
+                {
+                    for (int i = menu.Items.Count - 1; i >= 0; i--)
+                    {
+                        var el = menu.Items[i] as FrameworkElement;
+                        if (el != null && AppDefaultTag.Equals(el.Tag)) menu.Items.RemoveAt(i);
+                    }
+                    var pane = SidebarControl.Owning(_row);
+                    var app = pane != null ? pane.HostApp : null;
+                    if (string.IsNullOrEmpty(app) || App.AppDefaults == null) return;
+                    var capturedApp = app;
+                    menu.Items.Add(new Separator { Tag = AppDefaultTag });
+                    var mi = MakeItem("Always start " + capturedApp + " here",
+                        () => App.AppDefaults.Set(capturedApp, capturedPath));
+                    mi.Tag = AppDefaultTag;
+                    menu.Items.Add(mi);
+                };
             }
             menu.Items.Add(MakeItem("Copy path", () => { try { Clipboard.SetText(path); } catch { } }));
             return menu;

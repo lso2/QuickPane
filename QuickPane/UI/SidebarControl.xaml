@@ -33,15 +33,14 @@
                     <Border Height="1" Background="{DynamicResource SeparatorColor}" Margin="8,0,8,0" />
 
                     <!-- Profile tabs row (auto-hide optional) -->
-                    <ScrollViewer x:Name="ProfileTabsHost" HorizontalScrollBarVisibility="Hidden"
-                                  VerticalScrollBarVisibility="Disabled" Visibility="Collapsed" Tag="tabscroll">
+                    <ScrollViewer x:Name="ProfileTabsHost" Tag="tabscroll" HorizontalScrollBarVisibility="Hidden"
+                                  VerticalScrollBarVisibility="Disabled" Visibility="Collapsed">
                         <StackPanel x:Name="ProfileTabsBar" Orientation="Horizontal" Margin="6,3,6,3" />
                     </ScrollViewer>
                 </StackPanel>
 
                 <ScrollViewer Grid.Row="1" x:Name="Scroller" VerticalScrollBarVisibility="Auto"
-                              HorizontalScrollBarVisibility="Disabled" Padding="0,6,0,44"
-                              PreviewMouseWheel="OnScrollWheel">
+                              HorizontalScrollBarVisibility="Disabled" Padding="0,6,0,44">
                     <StackPanel x:Name="SectionsPanel" />
                 </ScrollViewer>
 

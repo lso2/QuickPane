@@ -110,10 +110,13 @@ namespace QuickPane.Explorer
             {
                 if (!NM.GetWindowRect(hwnd, out r)) return;
             }
-            pane.PositionBeside(r, WidthPx());
+            pane.PositionBeside(r, WidthPx(hwnd));
         }
 
-        private static int WidthPx()
+        /// <summary>Pane width in device pixels, as the user set it. The setting is already measured on
+        /// their own screen, so it is used as written; converting it by the monitor's scale inflated it
+        /// and left the pane and the space made for it disagreeing about how wide it was.</summary>
+        private static int WidthPx(IntPtr forWindow)
         {
             int w = App.Settings != null ? App.Settings.Current.SidebarWidthPx : 220;
             if (w < 160) w = 160; if (w > 400) w = 400;
@@ -166,6 +169,7 @@ namespace QuickPane.Explorer
         private readonly IntPtr _cab;
         private readonly Action<string> _navOverride;
         private Window _window;
+        private SidebarControl _sidebar;
         private IntPtr _handle;
         private bool _collapsed;
         private bool _havePos;
@@ -173,12 +177,17 @@ namespace QuickPane.Explorer
 
         public IntPtr Handle { get { return _handle; } }
 
-        public FollowerPane(IntPtr cab, Action<string> navigate = null)
+        /// <summary>The pane content, for moving keyboard focus into it.</summary>
+        public SidebarControl Sidebar { get { return _sidebar; } }
+
+        public FollowerPane(IntPtr cab, Action<string> navigate = null, string hostApp = null)
         {
             _cab = cab;
             _navOverride = navigate; // null -> drive an Explorer window; set -> drive e.g. a file dialog
             bool dark = App.Theme != null && App.Theme.IsDark;
             var sidebar = new SidebarControl();
+            sidebar.HostApp = hostApp;  // set before Attach, which is what builds the sections
+            _sidebar = sidebar;
             sidebar.SetResizeFromLeft(true); // outer (left) edge resizes; right stays flush to the window
             sidebar.Attach(NavigateThis);
             var sb = sidebar;
@@ -228,14 +237,53 @@ namespace QuickPane.Explorer
             int height = visible.Bottom - visible.Top;
             if (height < 50) return;
             // Sit flush to the left of the window without overlapping, so the window's left resize
-            // border stays reachable.
+            // border stays reachable. Clamping the pane to zero when there was no room put it on top of
+            // the window it belongs to, and on a monitor left of the primary one it threw the pane onto
+            // a different screen, so the window is pushed right to make room instead.
+            var wa = NM.WorkAreaFor(_cab);
             int left = visible.Left - effW;
-            if (left < 0) left = 0; // no room to the left (maximized): overlay the window's left edge
+            if (left < wa.Left)
+            {
+                MakeRoom(wa.Left + effW - visible.Left, wa);
+                left = wa.Left;
+            }
             int top = visible.Top;
 
-            // Owner relationship handles z-order, so only move and size the pane here.
-            NM.SetWindowPos(_handle, IntPtr.Zero, left, top, effW, height, NM.SWP_NOACTIVATE | NM.SWP_NOZORDER);
+            // Owner relationship handles z-order, so only move, size and show the pane here.
+            //
+            // SWP_SHOWWINDOW matters: the host window can be sitting with WS_VISIBLE clear while WPF
+            // still believes the Window is Visible, so the managed check below is a no-op and the pane
+            // is placed correctly and never drawn. That is every pane that goes beside rather than
+            // inside, which is the classic comdlg32 dialogs, Photoshop, and any app handed over after
+            // its dialog fought the inside layout.
+            NM.SetWindowPos(_handle, IntPtr.Zero, left, top, effW, height,
+                NM.SWP_NOACTIVATE | NM.SWP_NOZORDER | NM.SWP_SHOWWINDOW);
             if (_window.Visibility != Visibility.Visible) _window.Visibility = Visibility.Visible;
+        }
+
+        /// <summary>Slide the window this pane belongs to rightward by the amount the pane is short,
+        /// narrowing it only when the work area cannot hold both. Maximized and minimized windows are
+        /// left alone, because Windows owns those placements. SetWindowPos works in real window
+        /// coordinates while the pane is placed against the DWM visible bounds, so the true rect is read
+        /// back here rather than reusing the visible one, which would shrink the window by its invisible
+        /// border on every pass.</summary>
+        private void MakeRoom(int shortfall, NM.RECT wa)
+        {
+            if (shortfall <= 0 || !NM.IsWindow(_cab)) return;
+            if (NM.IsZoomed(_cab) || NM.IsIconic(_cab)) return;
+
+            NM.RECT wr;
+            if (!NM.GetWindowRect(_cab, out wr)) return;
+
+            int w = wr.Width, h = wr.Height;
+            int newLeft = wr.Left + shortfall;
+            if (newLeft + w > wa.Right)
+            {
+                w = wa.Right - newLeft;
+                if (w < 320) return; // too little left to be worth reshaping the window
+            }
+            NM.SetWindowPos(_cab, IntPtr.Zero, newLeft, wr.Top, w, h,
+                NM.SWP_NOZORDER | NM.SWP_NOACTIVATE);
         }
 
         private void ToggleCollapsed(SidebarControl sb)
@@ -250,14 +298,19 @@ namespace QuickPane.Explorer
 
         public void Hide()
         {
+            // Hide the window itself as well as telling WPF, so the two cannot disagree about whether
+            // the pane is on screen.
+            if (_handle != IntPtr.Zero) NM.ShowWindow(_handle, NM.SW_HIDE);
             if (_window != null && _window.Visibility == Visibility.Visible)
                 _window.Visibility = Visibility.Hidden;
         }
 
         public void Close()
         {
+            try { _sidebar?.Detach(); } catch (Exception ex) { Log.Error("sidebar detach", ex); }
             try { _window?.Close(); } catch (Exception ex) { Log.Error("follower close", ex); }
             _window = null;
+            _sidebar = null;
             _handle = IntPtr.Zero;
         }
     }

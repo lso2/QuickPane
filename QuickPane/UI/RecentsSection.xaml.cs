@@ -42,6 +42,10 @@ namespace QuickPane.UI
             PathStatus.Changed -= QueueRebuild;
         }
 
+        /// <summary>Release this section's subscriptions. Called by the pane, because a pane hosted in
+        /// an HwndSource never raises Unloaded.</summary>
+        public void Detach() { Unwire(); }
+
         private void QueueRebuild()
         {
             if (_rebuildQueued) return;
@@ -72,14 +76,15 @@ namespace QuickPane.UI
             }, () => RenameSectionPrompt("recents", "Recent"), out holder.Rotate, out _);
             header.ContextMenu = SectionMenu("recents", "Recent");
 
+            // Built as tree rows so a recent folder opens out into its subfolders the way a pinned one
+            // does, and so every folder row in the pane lines up down the same edge.
             foreach (var rec in App.Recents.Items)
             {
-                var fi = new FolderItem();
-                fi.Bind(rec.DisplayName, rec.TargetPath, rec.Exists, rec.IsFile);
                 var captured = rec;
-                fi.Clicked += () => OpenRecent(captured);
-                fi.ContextMenu = BuildRecentMenu(captured);
-                items.Children.Add(fi);
+                var node = new FolderTreeNode(rec.DisplayName, rec.TargetPath, rec.Exists,
+                    _navigate, 0, rec.IsFile);
+                node.Row.ContextMenu = BuildRecentMenu(captured);
+                items.Children.Add(node);
             }
 
             if (_expanded) holder.Rotate.Angle = 90;

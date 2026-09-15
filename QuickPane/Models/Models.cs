@@ -141,6 +141,21 @@ namespace QuickPane.Models
         [DataMember(Name = "sections", Order = 1)]
         public List<SectionSetting> Sections { get; set; }
 
+        // Keyboard navigation of the pane inside a file dialog. Off unless asked for, because it takes a
+        // system-wide hotkey and steals a key combination from whatever else wants it.
+        [DataMember(Name = "keyboardNav", Order = 40, EmitDefaultValue = false)]
+        public bool KeyboardNav { get; set; }
+
+        // The combination that moves focus into the pane. Modifiers are "ctrl", "alt", "shift", "win",
+        // joined with "+" and ending in a key name, e.g. "ctrl+shift+Q".
+        [DataMember(Name = "keyboardNavHotkey", Order = 41, EmitDefaultValue = false)]
+        public string KeyboardNavHotkey { get; set; } = "ctrl+shift+Q";
+
+        // Which apps the Recent Apps section lists: "open" for the ones brought to the front, "dialogs"
+        // for the ones whose Save and Open dialogs were used, "both" for either.
+        [DataMember(Name = "recentAppsSource", Order = 42, EmitDefaultValue = false)]
+        public string RecentAppsSource { get; set; } = "both";
+
         [DataMember(Name = "recentsMaxCount", Order = 2)]
         public int RecentsMaxCount { get; set; } = 15;
 
@@ -234,7 +249,10 @@ namespace QuickPane.Models
                     new SectionSetting { Type = "computer", Visible = true, Order = 2 },
                     new SectionSetting { Type = "network",  Visible = true, Order = 3 },
                     new SectionSetting { Type = "linux",    Visible = true, Order = 4 },
-                    new SectionSetting { Type = "ssh",      Visible = true, Order = 5 }
+                    new SectionSetting { Type = "ssh",      Visible = true, Order = 5 },
+                    new SectionSetting { Type = "search",      Visible = true, Order = -2 },
+                    new SectionSetting { Type = "appdefaults", Visible = true, Order = -1 },
+                    new SectionSetting { Type = "recentapps",  Visible = true, Order = 6 }
                 },
                 SshProfiles = new List<SshProfile>()
             };
@@ -250,6 +268,11 @@ namespace QuickPane.Models
             EnsureSection("network", 3);
             EnsureSection("linux", 4);
             EnsureSection("ssh", 5);
+            // The search box and the per-app folders belong above the pinned groups, so they default to
+            // negative orders and sort to the top for anyone whose settings predate them.
+            EnsureSection("search", -2);
+            EnsureSection("appdefaults", -1);
+            EnsureSection("recentapps", 6);
             if (SshProfiles == null) SshProfiles = new List<SshProfile>();
             foreach (var sp in SshProfiles)
             {
@@ -262,6 +285,9 @@ namespace QuickPane.Models
                 var am = (sp.AuthMethod ?? "key").Trim().ToLowerInvariant();
                 sp.AuthMethod = am == "password" ? "password" : "key";
             }
+            if (string.IsNullOrWhiteSpace(KeyboardNavHotkey)) KeyboardNavHotkey = "ctrl+shift+Q";
+            var ras = (RecentAppsSource ?? "").Trim().ToLowerInvariant();
+            RecentAppsSource = (ras == "open" || ras == "dialogs") ? ras : "both";
             if (RecentsMaxCount < 5) RecentsMaxCount = 5;
             if (RecentsMaxCount > 50) RecentsMaxCount = 50;
             if (SidebarWidthPx < 160) SidebarWidthPx = 160;

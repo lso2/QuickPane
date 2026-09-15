@@ -1,5 +1,61 @@
 # Changelog
 
+## [3.10.0] - 2026-09-14
+
+### Added
+- Search box at the top of the pane that filters every folder as you type.
+- App Folders section, which offers the folder you set for the app whose Save or Open dialog the pane is in.
+- "Always start {app} here" on a folder's right-click menu inside a file dialog.
+- Recent Apps section listing the applications you have been using, where a row opens its app and its right-click menu offers the folder that app's dialog was last sent to.
+- Browser rows in Recent Apps open out into that browser's profiles, where each row opens its own window.
+- Setting for which apps Recent Apps lists: the ones you open, the ones whose Save and Open dialogs you use, or both.
+- Keyboard shortcut that moves focus into the pane, which stays off until it is turned on under Settings, Hotkeys.
+- A This PC row inside the This PC section, which opens This PC and expands to the drives beneath it.
+- Files dragged from Explorer onto a pane folder move, copy, or become shortcuts, under the same Ctrl, Shift and Alt rules Explorer uses.
+- Settings footer showing the running version and a Download button when a newer release is published.
+- Connections tab names both components an SSH mount needs, links each download, and offers the install commands to copy.
+
+### Changed
+- Settings are grouped into tabs: Groups, Pane, Hotkeys, Connections and Backup.
+- The settings Pane tab is laid out in two columns.
+- Search box, App Folders and Recent Apps each have a checkbox and a place in the section order.
+- The magnifier sits on the right of the pane's search field, as it does in Explorer's.
+- The active profile in settings is marked by a filled Active badge.
+- Larger type and more spacing on the Pane, Hotkeys, Connections and Backup tabs.
+- Section headers show their expand caret at all times.
+- Recent folders open out into their subfolders and line up with every other folder row in the pane.
+- Programs carry the name and icon Windows shows for them, which tells side-by-side installs such as Chrome and Chrome Canary apart.
+- Deleting a group sends it to the Recycle Bin.
+- The mouse wheel scrolls the pane.
+- A sideways swipe, a tilt wheel, or Shift with the wheel scrolls the tab strips and the settings profile columns.
+
+### Fixed
+- The pane's search box takes the keyboard when it is clicked.
+- The search box filters pinned folders and tree rows.
+- A heading disappears along with the rows beneath it while a filter is active.
+
+## [3.8.7] - 2026-09-14
+
+### Fixed
+- Save and Open dialogs lay out correctly, with the file list, filename box and Save and Cancel buttons in place.
+- Save and Open dialogs open faster, with the pane following sooner behind them.
+- The pane appears in Save and Open dialogs reliably, including after QuickPane has been running for days.
+- Save and Open dialogs keep the size you left them at, instead of growing each time they open.
+- The pane is reachable when a dialog opens against the left edge of the screen, and the dialog moves over to make room.
+- Ordinary Windows Open and Save dialogs use the pane mode you chose in settings.
+- The pane shows up for apps that use the older style of Save dialog, such as IrfanView and Photoshop, sitting against the dialog's left edge.
+- Word's Save and Publish dialogs keep their file list and controls visible, with the pane moving to the dialog's left edge.
+- Resizing a Save or Open dialog leaves its file list clean, with no leftover pane text painted across the rows.
+- The Network section opens Network when you click it.
+- Resizing a Save or Open dialog leaves its buttons and bottom row in place, with the pane moving to the dialog's edge.
+- Clicking a drive letter in the pane navigates the dialog instead of closing it, and the pane keeps working in that app afterwards.
+- Panes sit in the right place and at the right size on a second monitor and on screens at a different scale.
+- The group picker opens on the screen you are working on.
+- Clicking a folder reaches an Explorer window that is mid-operation.
+- QuickPane keeps noticing dialogs and Explorer windows for the whole session.
+- Memory use stays steady over a long session.
+- The log keeps a month of history without filling up with one repeated line.
+
 ## [3.7.0] - 2026-08-13
 
 ### Added

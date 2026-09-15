@@ -5,6 +5,7 @@ using System.Text;
 using System.Windows.Threading;
 using QuickPane.Interop;
 using QuickPane.Services;
+using QuickPane.UI;
 using NM = QuickPane.Interop.NativeMethods;
 
 namespace QuickPane.Explorer
@@ -32,6 +33,7 @@ namespace QuickPane.Explorer
         private sealed class Verdict { public bool IsDialog; public int Tick; public int Rechecks; }
         private readonly Dictionary<IntPtr, Verdict> _verdicts = new Dictionary<IntPtr, Verdict>();
         private readonly HashSet<IntPtr> _loggedUnmatched = new HashSet<IntPtr>();
+        private int _dumpsLogged;
 
         private bool IsFileDialogCached(IntPtr hwnd)
         {
@@ -68,7 +70,11 @@ namespace QuickPane.Explorer
         {
             _mode = CurrentMode();
 
-            _life = new WinEventHook(NM.EVENT_OBJECT_CREATE, NM.EVENT_OBJECT_SHOW);
+            // Through HIDE rather than SHOW: a dialog is hidden before it is destroyed, and that is the
+            // last moment its size can still be put back. Releasing only on DESTROY left the widened
+            // size in place, and the shell records a dialog's size when it closes, so every Save As
+            // reopened wider than the last until its buttons ran past the edge of the screen.
+            _life = new WinEventHook(NM.EVENT_OBJECT_CREATE, NM.EVENT_OBJECT_HIDE);
             _life.Event += OnLife; _life.Install();
             _loc = new WinEventHook(NM.EVENT_OBJECT_LOCATIONCHANGE, NM.EVENT_OBJECT_LOCATIONCHANGE);
             _loc.Event += OnLoc; _loc.Install();
@@ -79,8 +85,19 @@ namespace QuickPane.Explorer
             // create/show events miss, reapplies inside-mode layout, and prunes closed dialogs. The
             // verdict cache keeps each pass cheap, so the interval mostly affects late attachment of a
             // dialog whose SHOW event was missed; the FOREGROUND hook already covers the common case.
-            _sweep = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
-            _sweep.Tick += (s, e) => Rescan();
+            // Render priority, not the default Background: a Background timer only runs when nothing else
+            // is queued, so on a busy dispatcher it stops firing and a dialog that never takes the
+            // foreground is never attached to at all. Rescan is wrapped because an exception escaping a
+            // Tick tears the timer down for good.
+            _sweep = new DispatcherTimer(DispatcherPriority.Render)
+            {
+                Interval = TimeSpan.FromMilliseconds(1000)
+            };
+            _sweep.Tick += (s, e) =>
+            {
+                try { Rescan(); }
+                catch (Exception ex) { Log.Error("dialog sweep", ex); }
+            };
             _sweep.Start();
 
             if (App.Settings != null) App.Settings.Changed += OnSettings;
@@ -112,12 +129,22 @@ namespace QuickPane.Explorer
             return false;
         }
 
-        private bool Attached(IntPtr hwnd) { return _beside.ContainsKey(hwnd) || _inside.ContainsKey(hwnd); }
+        // Handles currently having a pane built for them. Building one pumps the message queue, so a
+        // window event delivered during the build re-enters Attach for the same dialog; without this
+        // the re-entrant call finds the dictionaries still empty and builds a second pane on top of
+        // the first.
+        private readonly HashSet<IntPtr> _claiming = new HashSet<IntPtr>();
+
+        private bool Attached(IntPtr hwnd)
+        {
+            return _beside.ContainsKey(hwnd) || _inside.ContainsKey(hwnd) || _claiming.Contains(hwnd);
+        }
 
         private void OnLife(uint evt, IntPtr hwnd, int idObject, int idChild, uint thread)
         {
             if (idObject != NM.OBJID_WINDOW || idChild != 0) return;
             if (evt == NM.EVENT_OBJECT_DESTROY) { ForgetWindow(hwnd); Detach(hwnd); return; }
+            if (evt == NM.EVENT_OBJECT_HIDE) { if (Attached(hwnd)) Detach(hwnd); return; }
             // Probe on SHOW only: at CREATE the children are not built yet, so every #32770 anywhere
             // cost a full (and useless) child enumeration just to say "not yet".
             if (evt != NM.EVENT_OBJECT_SHOW) return;
@@ -142,50 +169,118 @@ namespace QuickPane.Explorer
                 if (IsFileDialogCached(hwnd)) { Attach(hwnd); return; }
                 // Diagnose unfamiliar pickers once per window, not on every focus change: the same
                 // Photoshop dialog used to dump its child tree into the log a dozen times a session.
-                if (NM.ClassOf(hwnd) == "#32770" && _loggedUnmatched.Add(hwnd))
+                if (NM.ClassOf(hwnd) == "#32770" && _loggedUnmatched.Add(hwnd) && _dumpsLogged < 12)
+                {
+                    _dumpsLogged++;
                     Log.Info("FG #32770 not matched as file dialog; children: " + DumpChildren(hwnd));
+                }
             }
             catch (Exception ex) { Log.Error("dialog fg", ex); }
         }
 
-        // Apps whose dialogs fought the inside shift once. Their future dialogs go straight to beside, so
-        // a known-hostile app (Photoshop) never flashes the inside attempt again this session.
-        private static readonly System.Collections.Generic.HashSet<uint> _besideProcs = new System.Collections.Generic.HashSet<uint>();
+        // Apps whose dialogs fought the inside shift. Their later dialogs go straight to beside, so a
+        // known-hostile app (Photoshop) never flashes the inside attempt again this session. Keyed by
+        // process name rather than pid, because Windows reuses pids and a fresh, innocent process
+        // inherits a number already in this set and loses inside mode for no reason of its own.
+        private static readonly HashSet<string> _besideApps =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         private void Attach(IntPtr hwnd)
         {
             if (_mode == "off" || Attached(hwnd)) return;
+
+            // Claim the dialog before anything is built for it. Creating a pane pumps the message
+            // queue (WPF window creation and ShowWindow both do), and the dictionaries below are only
+            // written once the pane is finished, so a window event arriving mid-build used to re-enter
+            // here and build a second pane for the same dialog. The second one captured the controls
+            // the first had already shifted as their original positions and shifted them again, which
+            // is the Save As dialog that draws correctly and then jumps sideways with its controls cut
+            // off at both edges.
+            _claiming.Add(hwnd);
             try
             {
-                uint pid; NM.GetWindowThreadProcessId(hwnd, out pid);
-                bool forceBeside = pid != 0 && (_besideProcs.Contains(pid) || IsKnownHostile(pid));
+                var owner = DialogNavigator.Owner(hwnd);
+                bool forceBeside = _besideApps.Contains(owner) || IsKnownHostile(owner);
 
                 // Classic comdlg32 dialogs are laid out by comdlg32 and break if reparented or shifted,
                 // and apps that fought the shift before are remembered, so both use the beside follower.
                 // Everything else honours the pane mode.
                 // Navigation drives the foreign dialog with window messages; run it on the worker so
                 // a busy host app (Photoshop mid-save) can never stall our input-attached UI thread.
-                Action<string> nav = p => WorkQueue.Post(() => DialogNavigator.Navigate(hwnd, p));
-                if (_mode == "beside" || forceBeside || DialogNavigator.IsClassicDialog(hwnd))
+                // The app and the folder are both known only here, which is what makes Recent Apps and
+                // the per-app folders possible at all.
+                var ownerExe = NM.ExePathOf(hwnd);
+                Action<string> nav = p =>
                 {
-                    var pane = new FollowerPane(hwnd, nav);
+                    App.RecentApps?.RecordDialog(ownerExe, p);
+                    WorkQueue.Post(() => DialogNavigator.Navigate(hwnd, p));
+                };
+                ActiveDialog.App = owner;
+
+                var kind = DialogNavigator.Classify(hwnd);
+                if (kind == DialogNavigator.DialogKind.NotReady && _mode != "beside" && !forceBeside)
+                    return; // half-built tree; the sweep looks again in a moment
+
+                if (_mode == "beside" || forceBeside || kind == DialogNavigator.DialogKind.Classic)
+                {
+                    // Which route a dialog took was the one thing never recorded, so a pane quietly
+                    // going beside when inside was configured looked identical to no pane at all.
+                    Log.Info("the " + owner + " dialog " + hwnd.ToString("X") + " gets a beside pane (" +
+                        (_mode == "beside" ? "pane mode is beside" :
+                         forceBeside ? "this app is on the beside list" : "classic comdlg32 dialog") + ").");
+                    var pane = new FollowerPane(hwnd, nav, owner);
                     _beside[hwnd] = pane;
                     PositionBeside(hwnd, pane);
                 }
                 else
                 {
-                    var win = new DialogInsidePane(hwnd, nav);
+                    var win = new DialogInsidePane(hwnd, nav, owner);
                     if (win.TryAttach()) _inside[hwnd] = win;
                     else win.Dispose(); // controls not ready yet; the sweep retries
                 }
             }
             catch (Exception ex) { Log.Error("attach dialog pane", ex); }
+            finally { _claiming.Remove(hwnd); }
+        }
+
+        /// <summary>Move keyboard focus into the pane attached to a dialog, if one is.
+        ///
+        /// A dialog belongs to another process, so its thread owns the input queue that decides where
+        /// focus goes. Borrowing that queue for the length of the call is what lets SetFocus land on our
+        /// own hosted window rather than being ignored.</summary>
+        public bool FocusPaneFor(IntPtr dialog)
+        {
+            IntPtr paneHandle = IntPtr.Zero;
+            SidebarControl sidebar = null;
+
+            DialogInsidePane inside;
+            if (_inside.TryGetValue(dialog, out inside)) { paneHandle = inside.PaneHandle; sidebar = inside.Sidebar; }
+            else
+            {
+                FollowerPane beside;
+                if (_beside.TryGetValue(dialog, out beside)) { paneHandle = beside.Handle; sidebar = beside.Sidebar; }
+            }
+            if (paneHandle == IntPtr.Zero) return false;
+
+            uint pid;
+            uint theirs = NM.GetWindowThreadProcessId(dialog, out pid);
+            uint ours = NM.GetCurrentThreadId();
+            bool attached = theirs != ours && NM.AttachThreadInput(ours, theirs, true);
+            try
+            {
+                NM.SetFocus(paneHandle);
+                if (sidebar != null) sidebar.FocusSearch();
+            }
+            finally { if (attached) NM.AttachThreadInput(ours, theirs, false); }
+            return true;
         }
 
         private void Detach(IntPtr hwnd)
         {
             if (_beside.TryGetValue(hwnd, out var pane)) { _beside.Remove(hwnd); try { pane.Close(); } catch { } }
             if (_inside.TryGetValue(hwnd, out var win)) { _inside.Remove(hwnd); try { win.Dispose(); } catch { } }
+            // With no dialog attached the per-app section goes back to listing every app.
+            if (_beside.Count == 0 && _inside.Count == 0) ActiveDialog.App = null;
         }
 
         private void PositionBeside(IntPtr hwnd, FollowerPane pane)
@@ -196,10 +291,13 @@ namespace QuickPane.Explorer
             {
                 if (!NM.GetWindowRect(hwnd, out r)) return;
             }
-            pane.PositionBeside(r, WidthPx());
+            pane.PositionBeside(r, WidthPx(hwnd));
         }
 
-        private static int WidthPx()
+        /// <summary>Pane width in device pixels, as the user set it. The setting is already measured on
+        /// their own screen, so it is used as written; converting it by the monitor's scale inflated it
+        /// and left the pane and the space made for it disagreeing about how wide it was.</summary>
+        private static int WidthPx(IntPtr forWindow)
         {
             int w = App.Settings != null ? App.Settings.Current.SidebarWidthPx : 220;
             if (w < 160) w = 160; if (w > 400) w = 400;
@@ -250,29 +348,26 @@ namespace QuickPane.Explorer
 
         // Apps known to run their own dialog layout, which fights the inside shift. Their dialogs skip
         // the inside attempt entirely so there is never a flash, on top of the learned set above.
-        private static bool IsKnownHostile(uint pid)
+        private static bool IsKnownHostile(string processName)
         {
-            try
-            {
-                var name = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName;
-                return name != null && name.IndexOf("photoshop", StringComparison.OrdinalIgnoreCase) >= 0;
-            }
-            catch { return false; }
+            return !string.IsNullOrEmpty(processName) &&
+                   processName.IndexOf("photoshop", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private void DemoteToBeside(IntPtr hwnd)
         {
             if (_inside.TryGetValue(hwnd, out var win)) { _inside.Remove(hwnd); try { win.Dispose(); } catch { } }
             // Remember the app so its later dialogs skip the inside attempt entirely.
-            uint pid; NM.GetWindowThreadProcessId(hwnd, out pid);
-            if (pid != 0) _besideProcs.Add(pid);
+            var owner = DialogNavigator.Owner(hwnd);
+            if (!string.IsNullOrEmpty(owner) && owner != "unknown") _besideApps.Add(owner);
             if (!NM.IsWindow(hwnd) || _beside.ContainsKey(hwnd)) return;
             var pane = new FollowerPane(hwnd, p => WorkQueue.Post(() => DialogNavigator.Navigate(hwnd, p)));
             _beside[hwnd] = pane;
             PositionBeside(hwnd, pane);
-            Log.Event("glitch", "the " + DialogNavigator.Owner(hwnd) + " dialog " + hwnd.ToString("X") +
-                " ran its own layout over the inside pane, so it was handed to the beside follower and " +
-                "that app's later dialogs skip the inside attempt for the rest of this session.");
+            Log.Event("glitch", "the " + owner + " dialog " + hwnd.ToString("X") +
+                " ran its own layout over the inside pane, so it was handed to the " +
+                "beside follower and that app's later dialogs skip the inside attempt for the rest of " +
+                "this session.");
         }
 
         private static string DumpChildren(IntPtr root)

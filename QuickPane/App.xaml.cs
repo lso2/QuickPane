@@ -39,6 +39,8 @@ namespace QuickPane
         public static GroupStore Groups { get; private set; }
         public static RecentFoldersService Recents { get; private set; }
         public static DriveService Drives { get; private set; }
+        public static RecentAppsService RecentApps { get; private set; }
+        public static AppDefaultsService AppDefaults { get; private set; }
         public static ThemeService Theme { get; private set; }
 
         protected override void OnStartup(StartupEventArgs e)
@@ -168,7 +170,11 @@ namespace QuickPane
                 }
                 catch (Exception ex) { Log.Error("groups reload", ex); }
                 // Defer the host switch so we never tear down a window from inside its own event.
-                Dispatcher.BeginInvoke(new Action(() => { try { ApplyHosts(); } catch (Exception ex) { Log.Error("apply hosts", ex); } }));
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try { ApplyHosts(); } catch (Exception ex) { Log.Error("apply hosts", ex); }
+                    try { ApplyHotkeys(); } catch (Exception ex) { Log.Error("apply hotkeys", ex); }
+                }));
             };
 
             Recents = new RecentFoldersService(Settings);
@@ -181,6 +187,12 @@ namespace QuickPane
             _dialogPanes.Start();     // adds a pane beside file Open/Save dialogs, in every pane mode
 
             Drives = new DriveService();
+            RecentApps = new RecentAppsService();
+            AppDefaults = new AppDefaultsService();
+
+            _hotkeys = new HotkeyService();
+            _hotkeys.Pressed += FocusPaneFromHotkey;
+            ApplyHotkeys();
 
             CreateTrayIcon();
 
@@ -191,6 +203,31 @@ namespace QuickPane
             // Move the breadcrumb off "starting", or a crash hours later would be journaled against
             // startup and point the search at the wrong place entirely.
             Log.Activity("running");
+        }
+
+        private static HotkeyService _hotkeys;
+
+        /// <summary>Re-read the keyboard navigation settings and register or drop the shortcut.</summary>
+        private void ApplyHotkeys()
+        {
+            if (_hotkeys == null || Settings == null) return;
+            var s = Settings.Current;
+            _hotkeys.Apply(s.KeyboardNav, s.KeyboardNavHotkey);
+        }
+
+        /// <summary>Put focus in the pane belonging to whatever dialog is in front.</summary>
+        private void FocusPaneFromHotkey()
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    var fg = Interop.NativeMethods.GetForegroundWindow();
+                    if (_dialogPanes != null && _dialogPanes.FocusPaneFor(fg)) return;
+                    Log.Info("keyboard navigation shortcut pressed with no pane on the window in front.");
+                }
+                catch (Exception ex) { Log.Error("focus pane hotkey", ex); }
+            }));
         }
 
         private string _windowMode;

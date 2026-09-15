@@ -16,6 +16,12 @@
     <SolidColorBrush x:Key="DriveBarTrack"     Color="#FFDDDDDD" />
     <SolidColorBrush x:Key="BrokenLinkColor"   Color="#FFB03030" />
 
+    <!-- Text fields, taking the colors Windows reports for its own: Window for the fill and
+         ControlDark for the edge, which is the white field on a gray toolbar that Explorer shows. -->
+    <SolidColorBrush x:Key="FieldBackground"  Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="FieldBorder"      Color="#FFA0A0A0" />
+    <SolidColorBrush x:Key="BadgeBackground"  Color="#FFDCDCDC" />
+
     <SolidColorBrush x:Key="AccentBrush"          Color="#FF0078D4" />
     <SolidColorBrush x:Key="ItemHoverBackground"  Color="#260078D4" />
     <SolidColorBrush x:Key="ItemActiveBackground" Color="#330078D4" />

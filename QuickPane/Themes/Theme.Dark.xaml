@@ -16,6 +16,14 @@
     <SolidColorBrush x:Key="DriveBarTrack"     Color="#FF3A3A3A" />
     <SolidColorBrush x:Key="BrokenLinkColor"   Color="#FFD06C6C" />
 
+    <!-- Text fields, taking the colors Windows uses for its own. In dark, Explorer draws its search
+         field in the same color as the bar around it and marks the edge with a rule, so a lighter box
+         here would read as a control Windows does not have. Not replaced by the live accent color the
+         way the Item* brushes are. -->
+    <SolidColorBrush x:Key="FieldBackground"  Color="#00000000" />
+    <SolidColorBrush x:Key="FieldBorder"      Color="#FF535353" />
+    <SolidColorBrush x:Key="BadgeBackground"  Color="#FF4A4A4A" />
+
     <SolidColorBrush x:Key="AccentBrush"          Color="#FF0078D4" />
     <SolidColorBrush x:Key="ItemHoverBackground"  Color="#260078D4" />
     <SolidColorBrush x:Key="ItemActiveBackground" Color="#330078D4" />
