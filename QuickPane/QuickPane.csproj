@@ -110,6 +110,16 @@
     <Compile Include="UI\DropLineAdorner.cs" />
     <Compile Include="UI\DragGhostAdorner.cs" />
     <Compile Include="Services\KnownFolders.cs" />
+    <Compile Include="Services\ShellFolders.cs" />
+    <Compile Include="Services\BesideApps.cs" />
+    <Compile Include="Services\GroupStore.Edits.cs" />
+    <Compile Include="Services\GroupStore.Profiles.cs" />
+    <Compile Include="UI\GroupSection.Drop.cs">
+      <DependentUpon>GroupSection.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="UI\GroupSection.Menus.cs">
+      <DependentUpon>GroupSection.xaml</DependentUpon>
+    </Compile>
   </ItemGroup>
   <ItemGroup>
     <Page Include="Themes\Controls.xaml">

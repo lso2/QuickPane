@@ -1,3 +1,8 @@
+// CrashGuard.cs
+// Purpose: the session heartbeat file and the start-up report of how the previous session ended.
+// Reason: terminations that never reach a managed handler leave only the heartbeat behind.
+// Defines: CrashGuard, CrashGuard.SessionRecord.
+// Doc: docs/notes/QuickPane/Services/CrashGuard.cs.md
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -85,7 +90,18 @@ namespace QuickPane.Services
             _marked = false;
 
             var prev = ReadState();
-            if (prev.Valid && !prev.Clean && !IsStillRunning(prev))
+            var windowsStarted = WindowsStartTime();
+            if (prev.Valid && !prev.Clean && !IsStillRunning(prev) &&
+                prev.Beat > DateTime.MinValue && windowsStarted > prev.Beat)
+            {
+                // The last heartbeat is older than this Windows start: the session ended when Windows did.
+                Log.Event("session",
+                    "previous session " + prev.Session + " (pid " + prev.Pid + ", version " + prev.Version +
+                    ") ended with Windows. last heartbeat " + Stamp(prev.Beat) + ", Windows started " +
+                    Stamp(windowsStarted) + ", last activity \"" + prev.Activity + "\" at " + Stamp(prev.ActivityAt) +
+                    ", uptime " + Describe(prev.Beat - prev.Started) + ".");
+            }
+            else if (prev.Valid && !prev.Clean && !IsStillRunning(prev))
             {
                 var gap = prev.Beat > DateTime.MinValue ? (DateTime.Now - prev.Beat) : TimeSpan.Zero;
                 Log.Event("crash",
@@ -105,6 +121,13 @@ namespace QuickPane.Services
 
             WriteState(false);
             StartHeartbeat();
+        }
+
+        /// <summary>When Windows last started, from the tick count. MinValue when it cannot be read.</summary>
+        private static DateTime WindowsStartTime()
+        {
+            try { return DateTime.Now - TimeSpan.FromMilliseconds(QuickPane.Interop.NativeMethods.GetTickCount64()); }
+            catch { return DateTime.MinValue; }
         }
 
         private static void StartHeartbeat()

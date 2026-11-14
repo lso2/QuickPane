@@ -1,3 +1,9 @@
+// GroupSection.xaml.cs
+// Purpose: builds the Groups section of the pane: group headers, tab strips, tab buttons and pin rows.
+// Reason: row building is one responsibility, separate from drag and drop and from menus.
+// Defines: GroupSection (owner of the partial set), PinnedFolderExtensions.
+// Set: GroupSection.xaml.cs, GroupSection.Drop.cs, GroupSection.Menus.cs.
+// Doc: docs/notes/QuickPane/UI/GroupSection.xaml.cs.md
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -15,25 +21,12 @@ namespace QuickPane.UI
 {
     /// <summary>The Groups section. Each group holds one or more tabs; a single-tab group looks like a
     /// plain group, several tabs show a scrollable tab row. Pins, tabs, and groups all drag to reorder,
-    /// dragging a group onto another merges its tabs in, and dragging a tab to empty space makes it a
-    /// group. Naming uses a top-level prompt because the embedded pane cannot host an inline text box.</summary>
+    /// dragging a group onto another merges its tabs in, dragging a tab to empty space makes it a
+    /// group, and a pin or file dropped on a tab button is placed in that tab. The embedded pane cannot
+    /// host an inline text box, and naming uses a top-level prompt.</summary>
     public partial class GroupSection : UserControl
     {
-        private const string PinFormat = "QuickPanePin";
-        private const string GroupFormat = "QuickPaneGroup";
-        private const string TabFormat = "QuickPaneTab";
-
         private Action<string> _navigate;
-        private Point _dragStart;
-        private bool _maybeDrag;
-        // Every pin, group header and tab shares these fields, so the press has to be tied to the element
-        // it landed on; otherwise the drag is claimed by whichever one the pointer has reached by the time
-        // it passes the threshold, and the row that moves is not the row that was grabbed.
-        private object _pressedSource;
-        private readonly Dictionary<FrameworkElement, DropLineAdorner> _adorners = new Dictionary<FrameworkElement, DropLineAdorner>();
-        private DragGhostAdorner _ghost;
-        private AdornerLayer _ghostLayer;
-        private Vector _grab;
 
         public GroupSection()
         {
@@ -84,76 +77,13 @@ namespace QuickPane.UI
             }), System.Windows.Threading.DispatcherPriority.Background);
         }
 
-        private void OnRootDragOver(object sender, DragEventArgs e)
-        {
-            UpdateGhost(e);
-            if (e.Data.GetDataPresent(TabFormat)) e.Effects = DragDropEffects.Move;
-            // The Link cursor tells the truth here: dropping on empty space creates a shortcut pin.
-            else if (e.Data.GetDataPresent(DataFormats.FileDrop)) e.Effects = DragDropEffects.Link;
-            else e.Effects = DragDropEffects.None;
-            e.Handled = true;
-        }
-
-        private void OnRootDrop(object sender, DragEventArgs e)
-        {
-            if (e.Data.GetDataPresent(TabFormat))
-            {
-                e.Handled = true;
-                var tr = e.Data.GetData(TabFormat) as TabRef;
-                if (tr == null) return;
-                var src = FindTab(tr.TabFolder);
-                if (src.Item2 != null) App.Groups.MoveTabToNewGroup(src.Item1, src.Item2);
-                return;
-            }
-            if (e.Data.GetDataPresent(DataFormats.FileDrop))
-            {
-                e.Handled = true;
-                FolderTreeNode.ClearDropHighlight();
-                PinToLastGroup(e.Data.GetData(DataFormats.FileDrop) as string[]);
-            }
-        }
-
-        // Pin dropped paths to the last group's active tab; with no groups yet, create one.
-        private static void PinToLastGroup(string[] paths)
-        {
-            if (paths == null || paths.Length == 0 || App.Groups == null) return;
-            WorkQueue.Post(() =>
-            {
-                try
-                {
-                    var groups = App.Groups.Groups;
-                    var last = groups.Count > 0 ? groups[groups.Count - 1] : App.Groups.CreateGroup("Pinned");
-                    if (last == null) return;
-                    App.Groups.AddPins(last.Active, paths.Where(PathIsReal).ToList());
-                }
-                catch (Exception ex) { Log.Error("pin to last group", ex); }
-            });
-        }
-
-        // Pin dropped paths (files or folders) to a specific group. Runs on the worker because it
-        // verifies the paths and writes .lnk files.
-        private static void PinPaths(PinnedGroup group, string[] paths)
-        {
-            if (group == null || paths == null || paths.Length == 0 || App.Groups == null) return;
-            WorkQueue.Post(() =>
-            {
-                try { App.Groups.AddPins(group.Active, paths.Where(PathIsReal).ToList()); }
-                catch (Exception ex) { Log.Error("pin paths", ex); }
-            });
-        }
-
-        private static bool PathIsReal(string path)
-        {
-            try { return !string.IsNullOrEmpty(path) && (System.IO.Directory.Exists(path) || System.IO.File.Exists(path)); }
-            catch { return false; }
-        }
-
         public void Build(Action<string> navigate)
         {
             _navigate = navigate;
             Wire();
             Root.Children.Clear();
             _adorners.Clear();
+            _tabOfButton.Clear();
             if (App.Groups == null) return;
 
             var groups = App.Groups.Groups;
@@ -180,11 +110,11 @@ namespace QuickPane.UI
             var active = group.Active;
             if (active != null)
             {
-                var capturedGroup = group;
+                var capturedTab = active;
                 var pinCtx = new PinDropContext
                 {
                     GroupName = GroupStore.DisplayName(group),
-                    PinHere = paths => PinPaths(capturedGroup, paths)
+                    PinHere = paths => PinPathsToTab(capturedTab, paths)
                 };
                 foreach (var pin in active.Items)
                 {
@@ -270,7 +200,7 @@ namespace QuickPane.UI
             };
             scroller.AllowDrop = true;
             scroller.DragOver += (s, e) => OnTabBarDragOver(bar, group, e);
-            scroller.DragLeave += (s, e) => RemoveTabPlaceholder();
+            scroller.DragLeave += (s, e) => OnTabBarDragLeave(scroller, e);
             scroller.Drop += (s, e) => OnTabBarDrop(bar, group, e);
             Grid.SetColumn(scroller, 1);
             grid.Children.Add(scroller);
@@ -325,6 +255,7 @@ namespace QuickPane.UI
             stack.Children.Add(underline);
 
             var btn = new Border { Background = Brushes.Transparent, Cursor = Cursors.Hand, Child = stack, Tag = "tab" };
+            _tabOfButton[btn] = tab;
             btn.ContextMenu = BuildTabMenu(group, tab);
 
             btn.PreviewMouseLeftButtonDown += (s, e) =>
@@ -361,513 +292,6 @@ namespace QuickPane.UI
             };
 
             return btn;
-        }
-
-        private FrameworkElement _tabPlaceholder;
-        private System.Windows.Controls.Panel _tabPlaceholderBar;
-        private int _tabPlaceholderIndex = -1;
-
-        private void OnTabBarDragOver(StackPanel bar, PinnedGroup group, DragEventArgs e)
-        {
-            e.Handled = true;
-            if (e.Data.GetDataPresent(TabFormat))
-            {
-                int index = ComputeTabIndex(bar, e);
-                // Only move the placeholder when the target index actually changes, so it does not jitter.
-                if (index != _tabPlaceholderIndex || !ReferenceEquals(_tabPlaceholderBar, bar))
-                {
-                    var tr = e.Data.GetData(TabFormat) as TabRef;
-                    var src = tr != null ? FindTab(tr.TabFolder) : Tuple.Create<PinnedGroup, PinnedTab>(null, null);
-                    ShowTabPlaceholder(bar, index, src.Item2 != null ? src.Item2.Name : "Tab");
-                }
-                e.Effects = DragDropEffects.Move;
-                return;
-            }
-            UpdateGhost(e);
-            RemoveTabPlaceholder();
-            if (e.Data.GetDataPresent(GroupFormat) || e.Data.GetDataPresent(PinFormat)) e.Effects = DragDropEffects.Move;
-            else if (e.Data.GetDataPresent(DataFormats.FileDrop)) e.Effects = DragDropEffects.Link; // dropping here pins (creates a shortcut)
-            else e.Effects = DragDropEffects.None;
-        }
-
-        private void OnTabBarDrop(StackPanel bar, PinnedGroup group, DragEventArgs e)
-        {
-            e.Handled = true;
-            RemoveTabPlaceholder();
-            int index = ComputeTabIndex(bar, e);
-            if (e.Data.GetDataPresent(TabFormat))
-            {
-                var tr = e.Data.GetData(TabFormat) as TabRef;
-                if (tr != null) DropTabAtIndex(group, index, tr);
-                return;
-            }
-            OnGroupDrop(group, e);
-        }
-
-        private int ComputeTabIndex(System.Windows.Controls.Panel bar, DragEventArgs e)
-        {
-            double x = e.GetPosition(bar).X;
-            int idx = 0;
-            foreach (var child in bar.Children)
-            {
-                var fe = child as FrameworkElement;
-                if (fe == null) continue;
-                var t = fe.Tag as string;
-                if (t != "tab") continue; // skip the placeholder
-                double left = fe.TranslatePoint(new Point(0, 0), bar).X;
-                if (x > left + fe.ActualWidth / 2) idx++; else break;
-            }
-            return idx;
-        }
-
-        private void ShowTabPlaceholder(StackPanel bar, int index, string name)
-        {
-            RemoveTabPlaceholder();
-            var ph = new Border
-            {
-                Tag = "ph",
-                Background = UiHelpers.AppBrush("ItemHoverBackground"),
-                CornerRadius = new CornerRadius(3),
-                Padding = new Thickness(6, 0, 6, 0),
-                Margin = new Thickness(2, 0, 2, 0),
-                Child = new TextBlock
-                {
-                    Text = name,
-                    FontSize = 12,
-                    Opacity = 0.6,
-                    Foreground = UiHelpers.AppBrush("TextPrimary"),
-                    VerticalAlignment = VerticalAlignment.Center
-                }
-            };
-            int insertAt = Math.Min(index, bar.Children.Count);
-            bar.Children.Insert(insertAt, ph);
-            _tabPlaceholder = ph;
-            _tabPlaceholderBar = bar;
-            _tabPlaceholderIndex = index;
-        }
-
-        private void RemoveTabPlaceholder()
-        {
-            if (_tabPlaceholder != null && _tabPlaceholderBar != null && _tabPlaceholderBar.Children.Contains(_tabPlaceholder))
-                _tabPlaceholderBar.Children.Remove(_tabPlaceholder);
-            _tabPlaceholder = null;
-            _tabPlaceholderBar = null;
-            _tabPlaceholderIndex = -1;
-        }
-
-        private void DropTabAtIndex(PinnedGroup destGroup, int index, TabRef tr)
-        {
-            var src = FindTab(tr.TabFolder);
-            if (src.Item2 == null) return;
-            if (ReferenceEquals(src.Item1, destGroup))
-            {
-                var ordered = destGroup.Tabs.Where(t => !ReferenceEquals(t, src.Item2)).ToList();
-                if (index < 0) index = 0;
-                if (index > ordered.Count) index = ordered.Count;
-                ordered.Insert(index, src.Item2);
-                App.Groups.ReorderTabs(destGroup, ordered);
-            }
-            else
-            {
-                App.Groups.MoveTabToGroup(src.Item2, destGroup);
-            }
-        }
-
-        // ---- group drag (header / row) ----
-        private void WireGroupDrag(FrameworkElement source, PinnedGroup group)
-        {
-            source.PreviewMouseLeftButtonDown += (s, e) =>
-            {
-                if (e.ClickCount == 2) return;
-                BeginMaybeDrag(source, e);
-            };
-            source.PreviewMouseLeftButtonUp += (s, e) => EndMaybeDrag();
-            source.MouseMove += (s, e) =>
-            {
-                if (!DragStarted(source, e)) return;
-                try
-                {
-                    var data = new DataObject();
-                    data.SetData(GroupFormat, new GroupRef { FolderPath = group.FolderPath });
-                    StartGhost(source, e);
-                    DragDrop.DoDragDrop(source, data, DragDropEffects.Move);
-                }
-                catch (Exception ex) { Log.Error("group drag", ex); }
-                finally { EndGhost(); }
-            };
-        }
-
-        private void EnableGroupDrop(FrameworkElement target, PinnedGroup group)
-        {
-            target.AllowDrop = true;
-            target.DragOver += (s, e) =>
-            {
-                UpdateGhost(e);
-                if (e.Data.GetDataPresent(GroupFormat))
-                {
-                    // Top third inserts before, bottom third inserts after (with a line), the middle
-                    // merges the dragged group in as tabs.
-                    double y = e.GetPosition(target).Y, h = Math.Max(1, target.ActualHeight);
-                    if (y < h * 0.33) Adorner(target).Update(1);
-                    else if (y > h * 0.66) Adorner(target).Update(h - 1);
-                    else HideAdorner(target);
-                    e.Effects = DragDropEffects.Move;
-                }
-                else
-                {
-                    HideAdorner(target);
-                    if (e.Data.GetDataPresent(TabFormat) || e.Data.GetDataPresent(PinFormat)) e.Effects = DragDropEffects.Move;
-                    else if (e.Data.GetDataPresent(DataFormats.FileDrop)) e.Effects = DragDropEffects.Link; // dropping here pins (creates a shortcut)
-                    else e.Effects = DragDropEffects.None;
-                }
-                e.Handled = true;
-            };
-            target.DragLeave += (s, e) => HideAdorner(target);
-            target.Drop += (s, e) =>
-            {
-                e.Handled = true;
-                HideAdorner(target);
-                if (e.Data.GetDataPresent(GroupFormat))
-                {
-                    var gr = e.Data.GetData(GroupFormat) as GroupRef;
-                    var src = App.Groups.Groups.FirstOrDefault(g => gr != null && string.Equals(g.FolderPath, gr.FolderPath, StringComparison.OrdinalIgnoreCase));
-                    if (src == null || ReferenceEquals(src, group)) return;
-                    double y = e.GetPosition(target).Y, h = Math.Max(1, target.ActualHeight);
-                    if (y >= h * 0.33 && y <= h * 0.66) App.Groups.MergeGroups(src, group);
-                    else ReorderGroupRelative(src, group, y > h * 0.66);
-                    return;
-                }
-                OnGroupDrop(group, e);
-            };
-        }
-
-        private void ReorderGroupRelative(PinnedGroup dragged, PinnedGroup target, bool after)
-        {
-            var ordered = App.Groups.Groups.ToList();
-            ordered.Remove(dragged);
-            int idx = ordered.FindIndex(g => ReferenceEquals(g, target));
-            if (idx < 0) return;
-            ordered.Insert(after ? idx + 1 : idx, dragged);
-            App.Groups.ReorderGroups(ordered);
-        }
-
-        private void OnGroupDrop(PinnedGroup group, DragEventArgs e)
-        {
-            try
-            {
-                if (e.Data.GetDataPresent(GroupFormat))
-                {
-                    var gr = e.Data.GetData(GroupFormat) as GroupRef;
-                    var src = App.Groups.Groups.FirstOrDefault(g => string.Equals(g.FolderPath, gr.FolderPath, StringComparison.OrdinalIgnoreCase));
-                    if (src != null && !ReferenceEquals(src, group)) App.Groups.MergeGroups(src, group);
-                    return;
-                }
-                if (e.Data.GetDataPresent(TabFormat))
-                {
-                    var tr = e.Data.GetData(TabFormat) as TabRef;
-                    var src = FindTab(tr.TabFolder);
-                    if (src.Item2 != null && !ReferenceEquals(src.Item1, group)) App.Groups.MoveTabToGroup(src.Item2, group);
-                    return;
-                }
-                if (e.Data.GetDataPresent(DataFormats.FileDrop))
-                {
-                    // Dropping on a group header/tab row pins the items (files or folders).
-                    PinPaths(group, e.Data.GetData(DataFormats.FileDrop) as string[]);
-                    return;
-                }
-                if (e.Data.GetDataPresent(PinFormat))
-                {
-                    var pr = e.Data.GetData(PinFormat) as PinRef;
-                    if (pr != null) MovePinToTabEnd(pr.LinkPath, group.Active);
-                }
-            }
-            catch (Exception ex) { Log.Error("group drop", ex); }
-        }
-
-        /// <summary>Remember the element a press landed on and start watching for a drag.</summary>
-        private void BeginMaybeDrag(object source, MouseButtonEventArgs e)
-        {
-            _pressedSource = source;
-            _dragStart = e.GetPosition(null);
-            _maybeDrag = true;
-        }
-
-        /// <summary>True once the pointer has travelled far enough for the press on this element to be a drag.</summary>
-        private bool DragStarted(object source, MouseEventArgs e)
-        {
-            if (!_maybeDrag || !ReferenceEquals(_pressedSource, source)) return false;
-            if (e.LeftButton != MouseButtonState.Pressed) { _maybeDrag = false; return false; }
-            var p = e.GetPosition(null);
-            if (Math.Abs(p.X - _dragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
-                Math.Abs(p.Y - _dragStart.Y) < SystemParameters.MinimumVerticalDragDistance) return false;
-            _maybeDrag = false;
-            return true;
-        }
-
-        private void EndMaybeDrag() { _maybeDrag = false; _pressedSource = null; }
-
-        // ---- pins ----
-        private void WirePinDragSource(FrameworkElement source, PinnedFolder pin)
-        {
-            source.PreviewMouseLeftButtonDown += (s, e) => BeginMaybeDrag(source, e);
-            source.PreviewMouseLeftButtonUp += (s, e) => EndMaybeDrag();
-            source.MouseMove += (s, e) =>
-            {
-                if (!DragStarted(source, e)) return;
-                try
-                {
-                    var data = new DataObject();
-                    data.SetData(PinFormat, new PinRef { LinkPath = pin.LinkPath });
-                    StartGhost(source, e);
-                    DragDrop.DoDragDrop(source, data, DragDropEffects.Move);
-                }
-                catch (Exception ex) { Log.Error("pin drag", ex); }
-                finally { EndGhost(); }
-            };
-        }
-
-        private void EnableItemsDrop(StackPanel items, PinnedGroup group)
-        {
-            items.AllowDrop = true;
-            items.DragOver += (s, e) =>
-            {
-                e.Handled = true;
-                UpdateGhost(e);
-                if (e.Data.GetDataPresent(GroupFormat))
-                {
-                    // Dropping a group over the body of another group reorders it just after.
-                    Adorner(items).Update(items.ActualHeight > 0 ? items.ActualHeight - 1 : 0);
-                    e.Effects = DragDropEffects.Move;
-                    return;
-                }
-                if (e.Data.GetDataPresent(TabFormat)) { e.Effects = DragDropEffects.None; return; }
-                int index; double lineY;
-                ComputeItemDrop(items, e, out index, out lineY);
-                Adorner(items).Update(lineY);
-                // Reordering a pin is a move; a FileDrop between rows pins there (creates a shortcut).
-                e.Effects = e.Data.GetDataPresent(PinFormat) ? DragDropEffects.Move : DragDropEffects.Link;
-            };
-            items.DragLeave += (s, e) => HideAdorner(items);
-            items.Drop += (s, e) =>
-            {
-                HideAdorner(items);
-                e.Handled = true;
-                if (e.Data.GetDataPresent(GroupFormat))
-                {
-                    var gr = e.Data.GetData(GroupFormat) as GroupRef;
-                    var src = App.Groups.Groups.FirstOrDefault(g => gr != null && string.Equals(g.FolderPath, gr.FolderPath, StringComparison.OrdinalIgnoreCase));
-                    if (src != null && !ReferenceEquals(src, group)) ReorderGroupRelative(src, group, true);
-                    return;
-                }
-                int index; double lineY;
-                ComputeItemDrop(items, e, out index, out lineY);
-                if (e.Data.GetDataPresent(DataFormats.FileDrop))
-                {
-                    // Pin files or folders at the drop line. Verification and .lnk writes run on the
-                    // worker so a slow source volume cannot stall the input-attached UI thread.
-                    FolderTreeNode.ClearDropHighlight();
-                    var dropped = e.Data.GetData(DataFormats.FileDrop) as string[];
-                    var tab = group.Active;
-                    int at = index;
-                    WorkQueue.Post(() =>
-                    {
-                        try
-                        {
-                            foreach (var path in dropped ?? new string[0])
-                                if (PathIsReal(path)) { App.Groups.AddPinAtIndex(tab, path, at); at++; }
-                        }
-                        catch (Exception ex) { Log.Error("pin at index", ex); }
-                    });
-                    return;
-                }
-                if (e.Data.GetDataPresent(PinFormat))
-                {
-                    var pr = e.Data.GetData(PinFormat) as PinRef;
-                    if (pr != null) MovePinToIndex(pr.LinkPath, group.Active, index);
-                }
-            };
-        }
-
-        private void ComputeItemDrop(StackPanel items, DragEventArgs e, out int index, out double lineY)
-        {
-            double y = e.GetPosition(items).Y;
-            index = items.Children.Count;
-            lineY = items.ActualHeight > 0 ? items.ActualHeight - 1 : 0;
-            for (int i = 0; i < items.Children.Count; i++)
-            {
-                var child = items.Children[i] as FrameworkElement;
-                if (child == null) continue;
-                double top = child.TranslatePoint(new Point(0, 0), items).Y;
-                double mid = top + child.ActualHeight / 2;
-                if (y < mid) { index = i; lineY = top; return; }
-            }
-        }
-
-        private void MovePinToIndex(string linkPath, PinnedTab destTab, int index)
-        {
-            var hit = FindPin(linkPath);
-            if (hit.Item2 == null || destTab == null) return;
-            if (!ReferenceEquals(hit.Item1, destTab)) { App.Groups.MovePinToTab(hit.Item2, destTab); return; }
-            var ordered = destTab.Items.Where(p => !ReferenceEquals(p, hit.Item2)).ToList();
-            if (index < 0) index = 0;
-            if (index > ordered.Count) index = ordered.Count;
-            ordered.Insert(index, hit.Item2);
-            App.Groups.ReorderPins(destTab, ordered);
-        }
-
-        private void MovePinToTabEnd(string linkPath, PinnedTab destTab)
-        {
-            var hit = FindPin(linkPath);
-            if (hit.Item2 != null && destTab != null) App.Groups.MovePinToTab(hit.Item2, destTab);
-        }
-
-        private static Tuple<PinnedTab, PinnedFolder> FindPin(string linkPath)
-        {
-            foreach (var g in App.Groups.Groups)
-                foreach (var t in g.Tabs)
-                {
-                    var hit = t.Items.FirstOrDefault(p => string.Equals(p.LinkPath, linkPath, StringComparison.OrdinalIgnoreCase));
-                    if (hit != null) return Tuple.Create(t, hit);
-                }
-            return Tuple.Create<PinnedTab, PinnedFolder>(null, null);
-        }
-
-        private static Tuple<PinnedGroup, PinnedTab> FindTab(string tabFolder)
-        {
-            foreach (var g in App.Groups.Groups)
-            {
-                var t = g.Tabs.FirstOrDefault(x => string.Equals(x.FolderPath, tabFolder, StringComparison.OrdinalIgnoreCase));
-                if (t != null) return Tuple.Create(g, t);
-            }
-            return Tuple.Create<PinnedGroup, PinnedTab>(null, null);
-        }
-
-        // ---- menus ----
-        private ContextMenu BuildGroupMenu(PinnedGroup group, PinnedTab activeTab)
-        {
-            var menu = new ContextMenu();
-            menu.Items.Add(Item("Rename", () => RenameGroupOrTab(group, group.Tabs.Count == 1 ? group.Tabs[0] : activeTab)));
-            menu.Items.Add(new Separator());
-            menu.Items.Add(Item("Add tab", () => { var v = TextPrompt.Ask("New tab name", ""); if (!string.IsNullOrWhiteSpace(v)) App.Groups.AddTab(group, v); }));
-            menu.Items.Add(Item("Add group below", () => { var v = TextPrompt.Ask("New group name", ""); if (!string.IsNullOrWhiteSpace(v)) App.Groups.CreateGroupAfter(group, v); }));
-            menu.Items.Add(Item("Add folder...", () => { var p = PickFolder(); if (!string.IsNullOrEmpty(p)) App.Groups.AddPin(group, p); }));
-            menu.Items.Add(Item("Add file...", () => { var p = PickFile(); if (!string.IsNullOrEmpty(p)) App.Groups.AddPin(group, p); }));
-            menu.Items.Add(Item("Move up", () => App.Groups.MoveGroup(group, -1)));
-            menu.Items.Add(Item("Move down", () => App.Groups.MoveGroup(group, +1)));
-            menu.Items.Add(new Separator());
-            menu.Items.Add(Item("Delete group", () => ConfirmDeleteGroup(group)));
-            return menu;
-        }
-
-        private ContextMenu BuildTabMenu(PinnedGroup group, PinnedTab tab)
-        {
-            var menu = new ContextMenu();
-            menu.Items.Add(Item("Rename tab", () => RenameTab(tab)));
-            menu.Items.Add(new Separator());
-            menu.Items.Add(Item("Move tab left", () => App.Groups.MoveTab(group, tab, -1)));
-            menu.Items.Add(Item("Move tab right", () => App.Groups.MoveTab(group, tab, +1)));
-            menu.Items.Add(Item("Make tab its own group", () => App.Groups.MoveTabToNewGroup(group, tab)));
-            menu.Items.Add(new Separator());
-            menu.Items.Add(Item("Delete tab", () => App.Groups.DeleteTab(group, tab)));
-            return menu;
-        }
-
-        /// <summary>
-        /// Point a pin somewhere else without removing and re-pinning it. A pin whose target moved, or
-        /// was captured wrongly in the first place, keeps its name and its place in the group and only
-        /// its destination changes. The text is taken as typed, because a share that is offline right
-        /// now is still the path that was meant.
-        /// </summary>
-        private void EditPinPath(PinnedFolder pin)
-        {
-            try
-            {
-                if (pin == null || string.IsNullOrEmpty(pin.LinkPath)) return;
-                var typed = TextPrompt.Ask("Edit path", pin.TargetPath ?? "");
-                if (typed == null) return;
-                typed = typed.Trim().Trim('"');
-                if (typed.Length == 0) return;
-                if (string.Equals(typed, pin.TargetPath, StringComparison.OrdinalIgnoreCase)) return;
-
-                ShellLink.Create(pin.LinkPath, typed);
-                Log.Info("pin \"" + pin.DisplayName + "\" now points at " + typed + ".");
-                if (App.Groups != null) App.Groups.Reload();
-            }
-            catch (Exception ex) { Log.Error("edit the path of '" + (pin == null ? "" : pin.DisplayName) + "'", ex); }
-        }
-
-        private ContextMenu BuildPinMenu(PinnedGroup group, PinnedTab tab, PinnedFolder pin)
-        {
-            var menu = new ContextMenu();
-            if (pin.IsFile)
-            {
-                menu.Items.Add(Item("Open file", () => OpenPinFile(pin)));
-                menu.Items.Add(Item("Open containing folder", () =>
-                {
-                    try
-                    {
-                        var d = System.IO.Path.GetDirectoryName(pin.TargetPath);
-                        if (!string.IsNullOrEmpty(d)) _navigate(d);
-                    }
-                    catch (Exception ex) { Log.Error("open containing folder", ex); }
-                }));
-            }
-            else
-            {
-                menu.Items.Add(Item("Open", () => { if (pin.Exists) _navigate(pin.TargetPath); }));
-                menu.Items.Add(Item("Open in new window", () => ExplorerNavigator.OpenNewWindow(pin.TargetPath)));
-            }
-            menu.Items.Add(new Separator());
-            menu.Items.Add(Item("Rename", () => { var v = TextPrompt.Ask("Rename pin", pin.DisplayName); if (v != null) App.Groups.RenamePin(pin, v); }));
-            menu.Items.Add(Item("Edit path", () => EditPinPath(pin)));
-            menu.Items.Add(new Separator());
-
-            var moveTo = new MenuItem { Header = "Move to group" };
-            foreach (var g in App.Groups.Groups.Where(x => !ReferenceEquals(x, group)))
-            {
-                var dest = g;
-                moveTo.Items.Add(Item(GroupStore.DisplayName(g), () => App.Groups.MovePinToGroup(pin, dest)));
-            }
-            if (moveTo.Items.Count == 0) moveTo.IsEnabled = false;
-            menu.Items.Add(moveTo);
-
-            menu.Items.Add(Item("Move up", () => App.Groups.MovePin(tab, pin, -1)));
-            menu.Items.Add(Item("Move down", () => App.Groups.MovePin(tab, pin, +1)));
-            menu.Items.Add(Item("Copy path", () => SafeClipboard(pin.TargetPath)));
-            menu.Items.Add(new Separator());
-            menu.Items.Add(Item("Remove Shortcut", () => App.Groups.RemovePin(pin)));
-            return menu;
-        }
-
-        private void ConfirmDeleteGroup(PinnedGroup group)
-        {
-            int count = group.Tabs.Sum(t => t.Items.Count);
-            if (count > 0)
-            {
-                var r = WinForms.MessageBox.Show(
-                    "Delete this group and its " + count + " pin(s)?", "QuickPane",
-                    WinForms.MessageBoxButtons.YesNo, WinForms.MessageBoxIcon.Warning);
-                if (r != WinForms.DialogResult.Yes) return;
-            }
-            App.Groups.DeleteGroup(group);
-        }
-
-        private void RenameGroupOrTab(PinnedGroup group, PinnedTab tab)
-        {
-            if (group.Tabs.Count == 1) RenameGroupSingle(group);
-            else RenameTab(tab);
-        }
-
-        private void RenameGroupSingle(PinnedGroup group)
-        {
-            var v = TextPrompt.Ask("Rename", group.Tabs.Count == 1 ? group.Tabs[0].Name : GroupStore.DisplayName(group));
-            if (v != null) App.Groups.RenameGroup(group, v);
-        }
-
-        private void RenameTab(PinnedTab tab)
-        {
-            var v = TextPrompt.Ask("Rename tab", tab.Name);
-            if (v != null) App.Groups.RenameTab(tab, v);
         }
 
         // ---- add group affordances ----
@@ -911,97 +335,6 @@ namespace QuickPane.UI
             btn.Click += (s, e) => { var v = TextPrompt.Ask("New group name", ""); if (!string.IsNullOrWhiteSpace(v)) App.Groups.CreateGroup(v); };
             return btn;
         }
-
-        // ---- drag ghost / drop line ----
-        private void StartGhost(FrameworkElement source, MouseEventArgs e)
-        {
-            SidebarControl.SuppressAutoHide = true;
-            try
-            {
-                var layer = AdornerLayer.GetAdornerLayer(Root);
-                if (layer == null) return;
-                _grab = (Vector)e.GetPosition(source);
-                _ghost = new DragGhostAdorner(Root, source, source.RenderSize);
-                layer.Add(_ghost);
-                _ghostLayer = layer;
-            }
-            catch (Exception ex) { Log.Error("start ghost", ex); }
-        }
-
-        private void UpdateGhost(DragEventArgs e)
-        {
-            if (_ghost == null) return;
-            var p = e.GetPosition(Root);
-            _ghost.SetPosition(new Point(p.X - _grab.X, p.Y - _grab.Y));
-        }
-
-        private void EndGhost()
-        {
-            SidebarControl.SuppressAutoHide = false;
-            try { if (_ghost != null && _ghostLayer != null) _ghostLayer.Remove(_ghost); } catch { }
-            _ghost = null; _ghostLayer = null;
-            FolderTreeNode.ClearDropHighlight(); // no row keeps a drag highlight after any drag ends
-        }
-
-        private DropLineAdorner Adorner(FrameworkElement host)
-        {
-            DropLineAdorner a;
-            if (_adorners.TryGetValue(host, out a)) return a;
-            var layer = AdornerLayer.GetAdornerLayer(host);
-            a = new DropLineAdorner(host);
-            if (layer != null) layer.Add(a);
-            _adorners[host] = a;
-            return a;
-        }
-
-        private void HideAdorner(FrameworkElement host)
-        {
-            DropLineAdorner a;
-            if (_adorners.TryGetValue(host, out a)) a.Hide();
-        }
-
-        // ---- helpers ----
-        private static MenuItem Item(string header, Action action)
-        {
-            var mi = new MenuItem { Header = header };
-            mi.Click += (s, e) => { try { action(); } catch (Exception ex) { Log.Error("menu action", ex); } };
-            return mi;
-        }
-
-        private static string PickFolder()
-        {
-            using (var dlg = new WinForms.FolderBrowserDialog())
-            {
-                dlg.Description = "Pick a folder to pin";
-                return dlg.ShowDialog() == WinForms.DialogResult.OK ? dlg.SelectedPath : null;
-            }
-        }
-
-        private static string PickFile()
-        {
-            var dlg = new Microsoft.Win32.OpenFileDialog { Title = "Pick a file to pin" };
-            return dlg.ShowDialog() == true ? dlg.FileName : null;
-        }
-
-        private static void OpenPinFile(PinnedFolder pin)
-        {
-            try
-            {
-                System.Diagnostics.Process.Start(
-                    new System.Diagnostics.ProcessStartInfo(pin.TargetPath) { UseShellExecute = true });
-            }
-            catch (Exception ex) { Log.Error("open pinned file", ex); }
-        }
-
-        private static void SafeClipboard(string text)
-        {
-            try { if (!string.IsNullOrEmpty(text)) Clipboard.SetText(text); }
-            catch (Exception ex) { Log.Error("clipboard set", ex); }
-        }
-
-        private sealed class PinRef { public string LinkPath { get; set; } }
-        private sealed class GroupRef { public string FolderPath { get; set; } }
-        private sealed class TabRef { public string GroupFolder { get; set; } public string TabFolder { get; set; } }
     }
 
     internal static class PinnedFolderExtensions

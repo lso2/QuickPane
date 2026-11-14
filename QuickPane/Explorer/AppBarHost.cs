@@ -1,3 +1,8 @@
+// AppBarHost.cs
+// Purpose: the desktop dock: a pane that reserves a screen edge as an app bar.
+// Reason: as a dock, the pane is available with no Explorer window open.
+// Defines: AppBarHost.
+// Doc: docs/notes/QuickPane/Explorer/AppBarHost.cs.md
 using System;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -111,7 +116,7 @@ namespace QuickPane.Explorer
             _pinTimer.Tick += (s, e) =>
             {
                 attempts++;
-                bool ok = _handle != IntPtr.Zero && VirtualDesktop.PinWindow(_handle);
+                bool ok = _handle != IntPtr.Zero && VirtualDesktop.PinWindow(_handle, attempts >= 8);
                 if (ok || attempts >= 8) { _pinTimer.Stop(); _pinTimer = null; }
             };
             _pinTimer.Start();

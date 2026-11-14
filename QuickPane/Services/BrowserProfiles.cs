@@ -1,3 +1,8 @@
+// BrowserProfiles.cs
+// Purpose: reads the profiles a browser is set up with, for the Recent Apps rows that open each profile.
+// Reason: launching a browser without a profile argument opens the profile used last.
+// Defines: BrowserProfiles, BrowserProfiles.Profile.
+// Doc: docs/notes/QuickPane/Services/BrowserProfiles.cs.md
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -64,11 +69,35 @@ namespace QuickPane.Services
                     return Firefox();
 
                 var dir = ChromiumDataDir(exePath);
-                if (dir != null) return Chromium(dir);
+                if (dir != null) return ChromiumOrLastGood(dir);
             }
-            catch (Exception ex) { Log.Error("read the profiles of '" + exePath + "'", ex); }
+            catch (Exception ex) { Log.Info("reading the profiles of '" + exePath + "' failed: " + ex.GetType().Name + ": " + ex.Message); }
 
             return list;
+        }
+
+        // Last profile list read per user-data folder. Chromium locks Local State for the moment it rewrites
+        // the file, and a read that lands in that moment gets this copy.
+        private static readonly Dictionary<string, List<Profile>> LastGood =
+            new Dictionary<string, List<Profile>>(StringComparer.OrdinalIgnoreCase);
+        private static readonly object LastGoodGate = new object();
+
+        private static List<Profile> ChromiumOrLastGood(string dir)
+        {
+            try
+            {
+                var list = Chromium(dir);
+                lock (LastGoodGate) LastGood[dir] = list;
+                return list;
+            }
+            catch (IOException ex)
+            {
+                List<Profile> cached;
+                lock (LastGoodGate) LastGood.TryGetValue(dir, out cached);
+                Log.Info("reading the profiles in '" + dir + "' failed: " + ex.Message + " " +
+                    (cached != null ? "The " + cached.Count + " profiles read earlier are shown." : "No earlier read exists for this browser."));
+                return cached != null ? new List<Profile>(cached) : new List<Profile>();
+            }
         }
 
         private static string ChromiumDataDir(string exePath)
@@ -95,7 +124,8 @@ namespace QuickPane.Services
             if (!File.Exists(file)) return list;
 
             XElement root;
-            using (var stream = File.Open(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            // Chromium replaces Local State by renaming a new copy over it, and the open shares delete access for that rename.
+            using (var stream = File.Open(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
             using (var reader = JsonReaderWriterFactory.CreateJsonReader(stream, XmlDictionaryReaderQuotas.Max))
             {
                 root = XElement.Load(reader);

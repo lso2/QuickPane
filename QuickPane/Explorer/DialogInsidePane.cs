@@ -1,3 +1,8 @@
+// DialogInsidePane.cs
+// Purpose: the inside pane for a Save or Open dialog: widens the dialog and shifts its controls right to clear a strip for the pane.
+// Reason: a dialog is a flat set of controls with no single content host to shift, unlike an Explorer window.
+// Defines: DialogInsidePane.
+// Doc: docs/notes/QuickPane/Explorer/DialogInsidePane.cs.md
 using System;
 using System.Collections.Generic;
 using System.Windows.Interop;
@@ -29,6 +34,7 @@ namespace QuickPane.Explorer
         private int _origWinW, _origWinH;
         private int _origWinX, _origWinY;
         private bool _moved;       // the dialog was nudged to keep the pane on screen
+        private bool _touched;     // true after the first change to the dialog or its controls
         private bool _attached, _disposed;
         private bool _applying, _shiftedOnce;
         private int _relayoutCount, _windowStart;
@@ -39,6 +45,13 @@ namespace QuickPane.Explorer
         /// <summary>Set when the dialog fought the inside shift (reset its own size), so the watcher can
         /// drop this dialog to the non-invasive beside follower instead.</summary>
         public bool Failed { get; private set; }
+
+        /// <summary>The measurement behind Failed, worded to follow "the {app} dialog {hwnd}".</summary>
+        public string FailReason { get; private set; }
+
+        /// <summary>True when the dialog itself moved its controls back at the same size. A width change
+        /// (the person dragging the corner) leaves this false.</summary>
+        public bool AppFought { get; private set; }
 
         public bool Attached { get { return _attached; } }
 
@@ -75,11 +88,10 @@ namespace QuickPane.Explorer
             if (_width > wa.Width / 3) _width = wa.Width / 3;
             if (_width < 160)
             {
-                // Widening would push the dialog's own buttons off the screen. The beside follower moves
-                // the dialog aside instead of reshaping it, so hand it over.
+                // Widening would push the dialog's own buttons off the screen. The watcher gives this dialog
+                // a beside pane. The beside pane slides or narrows the dialog to make room.
                 Failed = true;
-                Log.Info("inside pane does not fit beside the " + QuickPane.Interop.DialogNavigator.Owner(_dlg) +
-                    " dialog " + _dlg.ToString("X") + " on a " + wa.Width + "px work area, so it goes beside.");
+                FailReason = "leaves " + Math.Max(0, room) + " px of the " + wa.Width + " px work area and the inside pane needs 160 px";
                 return false;
             }
 
@@ -104,6 +116,7 @@ namespace QuickPane.Explorer
                 if (top < wa.Top) top = wa.Top;
                 _moved = left != win.Left || top != win.Top;
 
+                _touched = true;
                 NM.SetWindowPos(_dlg, IntPtr.Zero, left, top, newW, _origWinH,
                     NM.SWP_NOZORDER | NM.SWP_NOACTIVATE);
 
@@ -288,6 +301,10 @@ namespace QuickPane.Explorer
                 bool widthOff = Math.Abs(wr.Width - (_origWinW + _width)) > 4;
                 if ((total > 0 && off > total / 2) || widthOff)
                 {
+                    AppFought = !widthOff;
+                    FailReason = widthOff
+                        ? "changed width from " + (_origWinW + _width) + " to " + wr.Width + " px while the inside pane was attached"
+                        : "put " + off + " of " + total + " controls back over the inside pane at the same size";
                     // Give up on the first pass and hand the dialog to the beside follower, which never
                     // touches its controls. Retrying holds the dialog in a broken state for as long as
                     // the fight lasts; the follower costs a pane position and nothing else.
@@ -307,10 +324,9 @@ namespace QuickPane.Explorer
             if (++_relayoutCount > 12)
             {
                 Failed = true;
+                AppFought = true;
+                FailReason = "moved its controls back " + _relayoutCount + " times in under 1.5 s";
                 Restore();
-                Log.Event("glitch", "the " + QuickPane.Interop.DialogNavigator.Owner(_dlg) + " dialog " +
-                    _dlg.ToString("X") + " moved its controls back " + _relayoutCount +
-                    " times in under 1.5 s, so it was handed to the beside follower.");
                 return;
             }
 
@@ -330,11 +346,12 @@ namespace QuickPane.Explorer
         // both on teardown and when the dialog is handed off to the beside follower.
         private void Restore()
         {
-            Log.Activity("restoring the " + QuickPane.Interop.DialogNavigator.Owner(_dlg) + " dialog " +
+            if (_touched) Log.Activity("restoring the " + QuickPane.Interop.DialogNavigator.Owner(_dlg) + " dialog " +
                 _dlg.ToString("X") + " to its own layout");
             try
             {
-                if (NM.IsWindow(_dlg))
+                // An attempt that stopped before changing anything has nothing to put back.
+                if (_touched && NM.IsWindow(_dlg))
                 {
                     foreach (var kv in _orig)
                     {
@@ -347,8 +364,9 @@ namespace QuickPane.Explorer
                     NM.SetWindowPos(_dlg, IntPtr.Zero, _origWinX, _origWinY, _origWinW, _origWinH, flags);
                 }
             }
-            catch (Exception ex) { Log.Error("DialogInsidePane restore", ex); }
-            try { Repaint(); } catch { }
+            catch (Exception ex) { Log.Info("restoring dialog " + _dlg.ToString("X") + " failed: " + ex.Message); }
+            if (_touched) { try { Repaint(); } catch { } }
+            _touched = false;
             try { _sidebar?.Detach(); } catch (Exception ex) { Log.Error("sidebar detach", ex); }
             try { _host?.Dispose(); } catch { }
             _host = null; _sidebar = null;

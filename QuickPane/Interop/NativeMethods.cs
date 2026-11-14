@@ -1,3 +1,8 @@
+// NativeMethods.cs
+// Purpose: the Win32 P/Invoke surface for every window, shell and process call the app makes.
+// Reason: one file holds every native signature, and each one is findable by name.
+// Defines: NativeMethods.
+// Doc: docs/notes/QuickPane/Interop/NativeMethods.cs.md
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -254,6 +259,10 @@ namespace QuickPane.Interop
 
         [DllImport("kernel32.dll")]
         public static extern uint GetCurrentThreadId();
+
+        /// <summary>Milliseconds since Windows started.</summary>
+        [DllImport("kernel32.dll")]
+        public static extern ulong GetTickCount64();
 
         [DllImport("user32.dll")]
         public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);

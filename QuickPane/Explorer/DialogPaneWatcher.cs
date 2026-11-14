@@ -1,3 +1,8 @@
+// DialogPaneWatcher.cs
+// Purpose: finds Save and Open dialogs and gives each one an inside or a beside pane, following the pane mode.
+// Reason: file dialogs are windows of other apps and need detection separate from Explorer windows.
+// Defines: DialogPaneWatcher.
+// Doc: docs/notes/QuickPane/Explorer/DialogPaneWatcher.cs.md
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
@@ -178,12 +183,51 @@ namespace QuickPane.Explorer
             catch (Exception ex) { Log.Error("dialog fg", ex); }
         }
 
-        // Apps whose dialogs fought the inside shift. Their later dialogs go straight to beside, so a
-        // known-hostile app (Photoshop) never flashes the inside attempt again this session. Keyed by
-        // process name rather than pid, because Windows reuses pids and a fresh, innocent process
-        // inherits a number already in this set and loses inside mode for no reason of its own.
-        private static readonly HashSet<string> _besideApps =
+        // A width change can be the person dragging the corner, and apps with such a dialog go beside for
+        // this session only. Apps whose dialogs put their controls back are kept across restarts in
+        // BesideApps. Windows reuses pids, and both lists key on process name.
+        private static readonly HashSet<string> _besideThisSession =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Forget every app on the beside list, this session's and the stored one. Their next
+        /// dialogs try the inside pane again. Returns how many apps were forgotten.</summary>
+        internal static int ClearBesideList()
+        {
+            int n = _besideThisSession.Count;
+            _besideThisSession.Clear();
+            return n + BesideApps.Clear();
+        }
+
+        /// <summary>Why this app's dialogs skip the inside attempt, or null when they do not.</summary>
+        private static string BesideReason(string owner)
+        {
+            if (IsKnownHostile(owner)) return "Photoshop dialogs run their own layout";
+            if (BesideApps.Contains(owner)) return "this app's dialogs put their controls back over the inside pane before";
+            if (_besideThisSession.Contains(owner)) return "a dialog of this app changed width under the inside pane earlier this session";
+            return null;
+        }
+
+        /// <summary>Navigation for a dialog's pane. It records the folder for Recent Apps and drives the
+        /// dialog on the worker thread, away from the input-attached UI thread.</summary>
+        private static Action<string> DialogNav(IntPtr hwnd)
+        {
+            var ownerExe = NM.ExePathOf(hwnd);
+            return p =>
+            {
+                App.RecentApps?.RecordDialog(ownerExe, p);
+                WorkQueue.Post(() => DialogNavigator.Navigate(hwnd, p));
+            };
+        }
+
+        /// <summary>Build a beside pane for the dialog. A null reason skips the log line.</summary>
+        private void AttachBeside(IntPtr hwnd, Action<string> nav, string owner, string reason)
+        {
+            if (reason != null)
+                Log.Info("the " + owner + " dialog " + hwnd.ToString("X") + " gets a beside pane (" + reason + ").");
+            var pane = new FollowerPane(hwnd, nav, owner);
+            _beside[hwnd] = pane;
+            PositionBeside(hwnd, pane);
+        }
 
         private void Attach(IntPtr hwnd)
         {
@@ -200,21 +244,13 @@ namespace QuickPane.Explorer
             try
             {
                 var owner = DialogNavigator.Owner(hwnd);
-                bool forceBeside = _besideApps.Contains(owner) || IsKnownHostile(owner);
+                var besideReason = BesideReason(owner);
+                bool forceBeside = besideReason != null;
 
                 // Classic comdlg32 dialogs are laid out by comdlg32 and break if reparented or shifted,
-                // and apps that fought the shift before are remembered, so both use the beside follower.
+                // and apps on the beside list skip the inside attempt; both use the beside follower.
                 // Everything else honours the pane mode.
-                // Navigation drives the foreign dialog with window messages; run it on the worker so
-                // a busy host app (Photoshop mid-save) can never stall our input-attached UI thread.
-                // The app and the folder are both known only here, which is what makes Recent Apps and
-                // the per-app folders possible at all.
-                var ownerExe = NM.ExePathOf(hwnd);
-                Action<string> nav = p =>
-                {
-                    App.RecentApps?.RecordDialog(ownerExe, p);
-                    WorkQueue.Post(() => DialogNavigator.Navigate(hwnd, p));
-                };
+                var nav = DialogNav(hwnd);
                 ActiveDialog.App = owner;
 
                 var kind = DialogNavigator.Classify(hwnd);
@@ -223,20 +259,21 @@ namespace QuickPane.Explorer
 
                 if (_mode == "beside" || forceBeside || kind == DialogNavigator.DialogKind.Classic)
                 {
-                    // Which route a dialog took was the one thing never recorded, so a pane quietly
-                    // going beside when inside was configured looked identical to no pane at all.
-                    Log.Info("the " + owner + " dialog " + hwnd.ToString("X") + " gets a beside pane (" +
-                        (_mode == "beside" ? "pane mode is beside" :
-                         forceBeside ? "this app is on the beside list" : "classic comdlg32 dialog") + ").");
-                    var pane = new FollowerPane(hwnd, nav, owner);
-                    _beside[hwnd] = pane;
-                    PositionBeside(hwnd, pane);
+                    // A pane going beside when inside was configured looks identical to no pane at all,
+                    // and the log line names the route.
+                    AttachBeside(hwnd, nav, owner,
+                        _mode == "beside" ? "pane mode is beside" : forceBeside ? besideReason : "classic comdlg32 dialog");
                 }
                 else
                 {
                     var win = new DialogInsidePane(hwnd, nav, owner);
-                    if (win.TryAttach()) _inside[hwnd] = win;
-                    else win.Dispose(); // controls not ready yet; the sweep retries
+                    if (win.TryAttach()) { _inside[hwnd] = win; return; }
+                    // Failed marks a dialog too wide for the inside pane. A dialog that is not Failed has
+                    // controls still being built, and the sweep retries it.
+                    bool tooWide = win.Failed;
+                    string why = win.FailReason;
+                    win.Dispose();
+                    if (tooWide) AttachBeside(hwnd, nav, owner, "the dialog " + why);
                 }
             }
             catch (Exception ex) { Log.Error("attach dialog pane", ex); }
@@ -356,18 +393,26 @@ namespace QuickPane.Explorer
 
         private void DemoteToBeside(IntPtr hwnd)
         {
-            if (_inside.TryGetValue(hwnd, out var win)) { _inside.Remove(hwnd); try { win.Dispose(); } catch { } }
-            // Remember the app so its later dialogs skip the inside attempt entirely.
+            string reason = null;
+            bool fought = false;
+            if (_inside.TryGetValue(hwnd, out var win))
+            {
+                _inside.Remove(hwnd);
+                reason = win.FailReason;
+                fought = win.AppFought;
+                try { win.Dispose(); } catch { }
+            }
+            // Later dialogs of this app skip the inside attempt: across restarts when the dialog put its
+            // controls back, for this session when only its width changed.
             var owner = DialogNavigator.Owner(hwnd);
-            if (!string.IsNullOrEmpty(owner) && owner != "unknown") _besideApps.Add(owner);
+            bool known = !string.IsNullOrEmpty(owner) && owner != "unknown";
+            if (known && fought) BesideApps.Add(owner);
+            else if (known) _besideThisSession.Add(owner);
             if (!NM.IsWindow(hwnd) || _beside.ContainsKey(hwnd)) return;
-            var pane = new FollowerPane(hwnd, p => WorkQueue.Post(() => DialogNavigator.Navigate(hwnd, p)));
-            _beside[hwnd] = pane;
-            PositionBeside(hwnd, pane);
-            Log.Event("glitch", "the " + owner + " dialog " + hwnd.ToString("X") +
-                " ran its own layout over the inside pane, so it was handed to the " +
-                "beside follower and that app's later dialogs skip the inside attempt for the rest of " +
-                "this session.");
+            AttachBeside(hwnd, DialogNav(hwnd), owner, null);
+            Log.Event("glitch", "the " + owner + " dialog " + hwnd.ToString("X") + " " +
+                (reason ?? "failed the inside layout check") + ". It now has a beside pane, and later " + owner +
+                " dialogs open with one " + (known && fought ? "across restarts." : "for the rest of this session."));
         }
 
         private static string DumpChildren(IntPtr root)

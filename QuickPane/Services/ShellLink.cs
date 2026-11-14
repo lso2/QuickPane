@@ -1,3 +1,8 @@
+// ShellLink.cs
+// Purpose: creates and resolves .lnk shortcuts through IShellLinkW and IPersistFile.
+// Reason: pins are real Explorer shortcuts, and the groups folder stays portable and Explorer-native.
+// Defines: ShellLink.
+// Doc: docs/notes/QuickPane/Services/ShellLink.cs.md
 using System;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.ComTypes;
@@ -96,6 +101,16 @@ namespace QuickPane.Services
         /// <summary>Resolve the target of a .lnk. Returns null if it cannot be read.</summary>
         public static string ResolveTarget(string linkPath)
         {
+            bool? storedIsFile;
+            return ResolveTarget(linkPath, out storedIsFile);
+        }
+
+        /// <summary>Resolve the target of a .lnk and report the file-vs-folder kind the shortcut stored for
+        /// it when it was made. The kind comes from the .lnk header, with no disk access to the target, and
+        /// is null when the header carries no attributes. Returns null if the shortcut cannot be read.</summary>
+        public static string ResolveTarget(string linkPath, out bool? storedIsFile)
+        {
+            storedIsFile = null;
             IShellLinkW link = (IShellLinkW)new CShellLink();
             try
             {
@@ -105,6 +120,7 @@ namespace QuickPane.Services
                 var sb = new StringBuilder(1024); // room for long paths beyond MAX_PATH
                 var data = new WIN32_FIND_DATAW();
                 link.GetPath(sb, sb.Capacity, ref data, SLGP_RAWPATH);
+                if (data.dwFileAttributes != 0) storedIsFile = (data.dwFileAttributes & FileAttributeDirectory) == 0;
                 if (sb.Length > 0) return sb.ToString();
 
                 // Some shortcuts (many in the Recent folder) carry only an item-ID list, so GetPath is
@@ -134,6 +150,7 @@ namespace QuickPane.Services
         }
 
         private const uint SLGP_RAWPATH = 0x4;
+        private const uint FileAttributeDirectory = 0x10;
 
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
         private static extern bool SHGetPathFromIDListW(IntPtr pidl, [Out] StringBuilder pszPath);

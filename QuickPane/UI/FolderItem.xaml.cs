@@ -1,3 +1,8 @@
+// FolderItem.xaml.cs
+// Purpose: a single clickable folder row with an icon, used by the App Folders section.
+// Reason: App Folders rows need click and Enter handling without the tree behavior of FolderTreeNode.
+// Defines: FolderItem.
+// Doc: docs/notes/QuickPane/UI/FolderItem.xaml.cs.md
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -22,12 +27,28 @@ namespace QuickPane.UI
 
         public event Action Clicked;
 
+        private bool _isFile;
+        private bool _middlePressed;
+
         public FolderItem()
         {
             InitializeComponent();
             MouseEnter += (s, e) => Root.Background = Brush("ItemHoverBackground");
             MouseLeave += (s, e) => Root.Background = Brushes.Transparent;
             MouseLeftButtonUp += OnLeftClick;
+
+            // Middle-clicking a folder row opens it in a new Explorer window. With QTTabBar's window capture on, that window appears as a new tab.
+            MouseDown += (s, e) => { if (e.ChangedButton == MouseButton.Middle) { _middlePressed = true; e.Handled = true; } };
+            MouseUp += (s, e) =>
+            {
+                if (e.ChangedButton != MouseButton.Middle) return;
+                e.Handled = true;
+                bool pressedHere = _middlePressed;
+                _middlePressed = false;
+                if (pressedHere && !IsBroken && !_isFile && !string.IsNullOrEmpty(TargetPath))
+                    QuickPane.Interop.ExplorerNavigator.OpenNewWindow(TargetPath);
+            };
+            MouseLeave += (s, e) => _middlePressed = false;
 
             // Reachable by keyboard: arrows move between rows and Enter opens the one in focus. Rows are
             // only in the tab order when keyboard navigation is switched on, so nothing changes for
@@ -52,6 +73,7 @@ namespace QuickPane.UI
             DisplayName = display;
             TargetPath = targetPath;
             IsBroken = !exists;
+            _isFile = isFile;
             Label.Text = display;
             ToolTip = targetPath;
 

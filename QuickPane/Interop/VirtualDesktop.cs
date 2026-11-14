@@ -1,3 +1,8 @@
+// VirtualDesktop.cs
+// Purpose: virtual desktop queries and pinning a window to every desktop, for the desktop dock and the panes.
+// Reason: the dock is on screen across desktop switches only when the shell pins it.
+// Defines: VirtualDesktop.
+// Doc: docs/notes/QuickPane/Interop/VirtualDesktop.cs.md
 using System;
 using System.Runtime.InteropServices;
 using QuickPane.Services;
@@ -43,7 +48,12 @@ namespace QuickPane.Interop
             void MoveWindowToDesktop(IntPtr topLevelWindow, ref Guid desktopId);
         }
 
-        public static bool PinWindow(IntPtr hwnd)
+        // The shell registers the pinned-apps service under this CLSID. Asking by the interface IID
+        // returns E_NOTIMPL (measured on build 19044).
+        private static readonly Guid PinnedAppsService = new Guid("B5A399E7-1C87-46B8-88E9-FC5747B171BD");
+
+        /// <param name="logFailure">Log a failure. The dock retries several times and passes true on the last attempt only.</param>
+        public static bool PinWindow(IntPtr hwnd, bool logFailure = true)
         {
             try
             {
@@ -60,9 +70,10 @@ namespace QuickPane.Interop
                 viewColl.GetViewForHwnd(hwnd, out view);
                 if (view == null) return false;
 
+                var pinnedService = PinnedAppsService;
                 var pinnedGuid = typeof(IVirtualDesktopPinnedApps).GUID;
                 object pinnedObj;
-                shell.QueryService(ref pinnedGuid, ref pinnedGuid, out pinnedObj);
+                shell.QueryService(ref pinnedService, ref pinnedGuid, out pinnedObj);
                 var pinned = (IVirtualDesktopPinnedApps)pinnedObj;
 
                 pinned.PinView(view);
@@ -70,7 +81,7 @@ namespace QuickPane.Interop
             }
             catch (Exception ex)
             {
-                Log.Error("PinWindow (all desktops) unsupported on this build", ex);
+                if (logFailure) Log.Info("pinning window " + hwnd.ToString("X") + " to every desktop failed: " + ex.GetType().Name + ": " + ex.Message);
                 return false;
             }
         }

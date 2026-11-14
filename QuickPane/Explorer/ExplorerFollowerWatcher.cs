@@ -1,3 +1,8 @@
+// ExplorerFollowerWatcher.cs
+// Purpose: Beside mode: a pane window owned by its Explorer window or file dialog and placed against its left edge.
+// Reason: a beside pane changes nothing inside its window, and it is the fallback when the inside pane cannot hold.
+// Defines: ExplorerFollowerWatcher, FollowerPane.
+// Doc: docs/notes/QuickPane/Explorer/ExplorerFollowerWatcher.cs.md
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
@@ -174,6 +179,7 @@ namespace QuickPane.Explorer
         private bool _collapsed;
         private bool _havePos;
         private NM.RECT _lastVisible;
+        private int _placementLogs, _makeRoomLogs;   // first few per pane only
 
         public IntPtr Handle { get { return _handle; } }
 
@@ -259,6 +265,18 @@ namespace QuickPane.Explorer
             NM.SetWindowPos(_handle, IntPtr.Zero, left, top, effW, height,
                 NM.SWP_NOACTIVATE | NM.SWP_NOZORDER | NM.SWP_SHOWWINDOW);
             if (_window.Visibility != Visibility.Visible) _window.Visibility = Visibility.Visible;
+
+            // A dialog pane's first placements go to the log: a pane missing from the screen needs the
+            // rect it was given and whether Windows reports it visible.
+            if (_navOverride != null && _placementLogs < 2)
+            {
+                _placementLogs++;
+                NM.RECT pr;
+                NM.GetWindowRect(_handle, out pr);
+                Log.Info("beside pane " + _handle.ToString("X") + " for window " + _cab.ToString("X") + " placed at (" +
+                    pr.Left + "," + pr.Top + " " + pr.Width + "x" + pr.Height + "), visible=" + NM.IsWindowVisible(_handle) +
+                    ", window bounds (" + visible.Left + "," + visible.Top + " " + visible.Width + "x" + visible.Height + ").");
+            }
         }
 
         /// <summary>Slide the window this pane belongs to rightward by the amount the pane is short,
@@ -270,7 +288,13 @@ namespace QuickPane.Explorer
         private void MakeRoom(int shortfall, NM.RECT wa)
         {
             if (shortfall <= 0 || !NM.IsWindow(_cab)) return;
-            if (NM.IsZoomed(_cab) || NM.IsIconic(_cab)) return;
+            bool log = _makeRoomLogs < 3;
+            if (log) _makeRoomLogs++;
+            if (NM.IsZoomed(_cab) || NM.IsIconic(_cab))
+            {
+                if (log) Log.Info("no room made beside window " + _cab.ToString("X") + ": it is maximized or minimized.");
+                return;
+            }
 
             NM.RECT wr;
             if (!NM.GetWindowRect(_cab, out wr)) return;
@@ -280,10 +304,16 @@ namespace QuickPane.Explorer
             if (newLeft + w > wa.Right)
             {
                 w = wa.Right - newLeft;
-                if (w < 320) return; // too little left to be worth reshaping the window
+                if (w < 320)
+                {
+                    if (log) Log.Info("no room made beside window " + _cab.ToString("X") + ": only " + w + " px of width would remain.");
+                    return; // too little left to be worth reshaping the window
+                }
             }
             NM.SetWindowPos(_cab, IntPtr.Zero, newLeft, wr.Top, w, h,
                 NM.SWP_NOZORDER | NM.SWP_NOACTIVATE);
+            if (log) Log.Info("made room beside window " + _cab.ToString("X") + ": moved from x=" + wr.Left + " w=" + wr.Width +
+                " to x=" + newLeft + " w=" + w + ".");
         }
 
         private void ToggleCollapsed(SidebarControl sb)

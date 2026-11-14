@@ -1,3 +1,8 @@
+// FolderTreeNode.cs
+// Purpose: one folder or file row in the pane, with its subfolders expanding beneath it like the Explorer tree.
+// Reason: groups, recents, drives and shell roots share one row type with one set of click, middle-click and drop rules.
+// Defines: PinDropContext, FolderTreeNode.
+// Doc: docs/notes/QuickPane/UI/FolderTreeNode.cs.md
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -39,6 +44,7 @@ namespace QuickPane.UI
         private readonly Action _onClick;
         private bool _loaded;
         private bool _expanded;
+        private bool _middlePressed;
         private readonly bool _hasChildren;
 
         public Border Row { get { return _row; } }
@@ -125,18 +131,32 @@ namespace QuickPane.UI
             _row.MouseLeave += (s, e) =>
             {
                 _row.Background = Brushes.Transparent;
+                _middlePressed = false;
                 if (!_expanded && _childProvider == null) _chevGlyph.Opacity = 0;
             };
             _row.MouseLeftButtonUp += (s, e) =>
             {
                 if (_onClick != null) { _onClick(); return; }
-                if (exists && !isFile) _navigate(path);
-                else if (isFile) Open(path);
+                // A row built before its target was probed can carry a stale "file", and opening a folder
+                // as a file starts a new Explorer window. The cached kind is read again at click time.
+                bool fileNow = isFile && PathStatus.IsFile(path);
+                if (exists && !fileNow) _navigate(path);
+                else if (fileNow) Open(path);
+            };
+            // Middle-clicking a folder row opens it in a new Explorer window. With QTTabBar's window capture on, that window appears as a new tab.
+            _row.MouseDown += (s, e) => { if (e.ChangedButton == MouseButton.Middle) { _middlePressed = true; e.Handled = true; } };
+            _row.MouseUp += (s, e) =>
+            {
+                if (e.ChangedButton != MouseButton.Middle) return;
+                e.Handled = true;
+                bool pressedHere = _middlePressed;
+                _middlePressed = false;
+                if (pressedHere && _onClick == null && exists && !isFile) ExplorerNavigator.OpenNewWindow(path);
             };
             if (level > 0 && onClick == null) _row.ContextMenu = BasicMenu(path, isFile);
 
             // Items dropped from Explorer onto a real folder move/copy/link into it (or pin), below.
-            if (!isFile && exists && childProvider == null && onClick == null)
+            if (!isFile && exists && childProvider == null && onClick == null && !ShellFolders.NeedsShell(path))
             {
                 _row.AllowDrop = true;
                 _row.DragOver += OnFileDragOver;
@@ -173,7 +193,8 @@ namespace QuickPane.UI
         // current row centrally clears the previous row on every transition.
         private static Border _dropHighlightRow;
 
-        private static void HighlightDropRow(Border row)
+        /// <summary>Light one drop target (a folder row or a tab button) and unlight the previous one.</summary>
+        internal static void HighlightDropRow(Border row)
         {
             if (_dropHighlightRow != null && !ReferenceEquals(_dropHighlightRow, row))
                 _dropHighlightRow.Background = Brushes.Transparent;
@@ -299,6 +320,20 @@ namespace QuickPane.UI
             var path = _path;
             var nav = _navigate;
             var level = _level;
+            if (ShellFolders.NeedsShell(path))
+            {
+                // Network, \\wsl$ and other server roots are not paths Directory.GetDirectories accepts.
+                WorkQueue.Post(() =>
+                {
+                    var found = ShellFolders.List(path);
+                    WorkQueue.PostUI(() =>
+                    {
+                        foreach (var f in found)
+                            _children.Children.Add(new FolderTreeNode(f.Name, f.Path, true, nav, level + 1));
+                    });
+                });
+                return;
+            }
             WorkQueue.Post(() =>
             {
                 string[] dirs;

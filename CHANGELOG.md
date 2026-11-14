@@ -1,5 +1,24 @@
 # Changelog
 
+## [3.11.0] - 2026-11-14
+
+### Added
+- Middle-clicking a folder in the pane opens it in a new Explorer window. With QTTabBar's window capture on, the window appears as a new tab.
+- Clear the dialog beside list, a Troubleshooting command in the tray menu that gives every app's Save and Open dialogs the inside pane again.
+
+### Changed
+- An app whose Save and Open dialogs move their controls back over the inside pane opens later dialogs with a beside pane, across restarts.
+- A session that ends when Windows shuts down is logged as a Windows shutdown.
+
+### Fixed
+- Dropping a pin, or a folder from Explorer, on a tab other than the active one places it in that tab.
+- Clicking a pin to a folder with a dot in its name, such as `.claude` or `lxx.plexpixel.com`, opens it in the same window.
+- A beside pane appears for Save and Open dialogs too wide for the inside pane.
+- App Folders and "Always start {app} here" appear in a dialog's beside pane after it replaces the inside pane.
+- Browser rows in Recent Apps list their profiles while the browser is running.
+- The Linux and Network rows expand into their folders.
+- The desktop dock is pinned to every virtual desktop when that setting is on.
+
 ## [3.10.0] - 2026-09-14
 
 ### Added

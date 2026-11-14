@@ -1,7 +1,7 @@
 ; QuickPane one-click installer script for Inno Setup (https://jrsoftware.org/isinfo.php).
 ;
-; This produces a single QuickPaneSetup.exe. Because QuickPane is a user-mode app that only writes
-; HKCU keys, the installer runs without administrator rights (PrivilegesRequired=lowest). It installs
+; This produces a single QuickPaneSetup-<version>-release.exe in the Output folder beside app. QuickPane is a user-mode app that only writes
+; HKCU keys, and the installer runs without administrator rights (PrivilegesRequired=lowest). It installs
 ; the executable, creates a Start menu shortcut and an optional desktop shortcut, registers the
 ; "Pin to Quick Pane" folder verb, adds a startup entry, and launches the app. Uninstall preserves the
 ; user's groups and settings under %APPDATA%\QuickPane.
@@ -10,7 +10,7 @@
 ; first so QuickPane.exe exists at the path in [Files].
 
 #define MyAppName "QuickPane"
-#define MyAppVersion "3.10.0"
+#define MyAppVersion "3.11.0"
 #define MyAppPublisher "PlexPixel"
 #define MyAppExe "QuickPane.exe"
 
@@ -23,7 +23,8 @@ DefaultDirName={localappdata}\{#MyAppName}
 DisableProgramGroupPage=yes
 DisableDirPage=yes
 PrivilegesRequired=lowest
-OutputBaseFilename=QuickPaneSetup
+OutputDir=..\Output
+OutputBaseFilename=QuickPaneSetup-{#MyAppVersion}-release
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -43,6 +44,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "QuickPane\bin\x64\Release\{#MyAppExe}"; DestDir: "{app}"; Flags: ignoreversion
 ; The .config carries the per-monitor DPI switch, so it ships beside the executable.
 Source: "QuickPane\bin\x64\Release\{#MyAppExe}.config"; DestDir: "{app}"; Flags: ignoreversion
+; The GPLv3 text ships with the program.
+Source: "LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Icons]
 ; QuickPane spends its life in the tray, so without a launcher here the only way back in after the app

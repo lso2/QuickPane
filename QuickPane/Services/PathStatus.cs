@@ -1,3 +1,8 @@
+// PathStatus.cs
+// Purpose: cached, background-probed facts about paths: whether each exists and whether it is a file or a folder.
+// Reason: the UI thread shares Explorer's input queue and reads only this cache, never the disk.
+// Defines: PathStatus.
+// Doc: docs/notes/QuickPane/Services/PathStatus.cs.md
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -24,6 +29,7 @@ namespace QuickPane.Services
             public bool IsFile;
             public bool Probed;
             public bool InFlight;
+            public bool SeedLogged;
             public int Tick;      // completion time of the last probe
         }
 
@@ -40,12 +46,36 @@ namespace QuickPane.Services
             return e == null || e.Exists;
         }
 
-        /// <summary>Cached file-vs-folder; extension guess for never-probed paths. Queues a probe.</summary>
+        /// <summary>Cached file-vs-folder. A never-probed path answers with the kind its shortcut stored
+        /// (SeedKind), or else the extension guess. Queues a probe.</summary>
         public static bool IsFile(string path)
         {
             var e = Lookup(path);
             if (e == null) return false;
-            return e.Probed ? e.IsFile : GuessIsFile(path);
+            lock (Gate) return e.IsFile;
+        }
+
+        /// <summary>Record the file-vs-folder kind a shortcut stored for its target. It answers IsFile until
+        /// a probe does. Under the extension guess a folder named "lxx.plexpixel.com" or ".claude" counts as
+        /// a file, and clicking a pin row counted as a file opens a new window.</summary>
+        public static void SeedKind(string path, bool isFile)
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            bool logIt = false;
+            lock (Gate)
+            {
+                Entry e;
+                if (!Map.TryGetValue(path, out e))
+                {
+                    e = new Entry { Exists = true };
+                    Map[path] = e;
+                }
+                if (!e.Probed) e.IsFile = isFile;
+                if (!e.SeedLogged && GuessIsFile(path) != isFile) { e.SeedLogged = true; logIt = true; }
+            }
+            if (logIt)
+                Log.Info("'" + path + "': its shortcut stores a " + (isFile ? "file" : "folder") +
+                    " and the extension guess says " + (isFile ? "folder" : "file") + ". The shortcut's kind is used.");
         }
 
         /// <summary>True only when a probe has completed and found the path alive. Used to gate

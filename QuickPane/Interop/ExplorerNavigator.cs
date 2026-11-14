@@ -1,3 +1,8 @@
+// ExplorerNavigator.cs
+// Purpose: drives a specific Explorer window from outside its process through Shell.Application automation.
+// Reason: the pane navigates its own Explorer window and opens new ones without code inside explorer.exe.
+// Defines: ExplorerNavigator.
+// Doc: docs/notes/QuickPane/Interop/ExplorerNavigator.cs.md
 using System;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -212,13 +217,15 @@ namespace QuickPane.Interop
         private const BindingFlags CallFlags = BindingFlags.InvokeMethod;
         private const BindingFlags GetFlags = BindingFlags.GetProperty;
 
-        private static object Call(object target, string member, params object[] args)
+        /// <summary>Late-bound method call through IDispatch. Shared with ShellFolders.</summary>
+        internal static object Call(object target, string member, params object[] args)
         {
             if (target == null) return null;
             return target.GetType().InvokeMember(member, CallFlags, null, target, args);
         }
 
-        private static object Get(object target, string member)
+        /// <summary>Late-bound property read through IDispatch. Shared with ShellFolders.</summary>
+        internal static object Get(object target, string member)
         {
             if (target == null) return null;
             return target.GetType().InvokeMember(member, GetFlags, null, target, null);

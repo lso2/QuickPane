@@ -1,3 +1,8 @@
+// App.xaml.cs
+// Purpose: the tray application: startup, single instance, services, tray menu and shutdown.
+// Reason: QuickPane runs as a tray app and every pane, watcher and service starts and stops here.
+// Defines: App.
+// Doc: docs/notes/QuickPane/App.xaml.cs.md
 using System;
 using System.Linq;
 using System.Threading;
@@ -302,6 +307,8 @@ namespace QuickPane
             toolsMenu.DropDownItems.Add("Open log folder", null, (s, a) => Log.OpenFolder());
             toolsMenu.DropDownItems.Add("Create desktop shortcut", null, (s, a) => CreateDesktopShortcut());
             toolsMenu.DropDownItems.Add("Restart QuickPane", null, (s, a) => Dispatcher.Invoke(RestartSelf));
+            toolsMenu.DropDownItems.Add("Clear the dialog beside list", null,
+                (s, a) => Dispatcher.Invoke(() => DialogPaneWatcher.ClearBesideList()));
             menu.Items.Add(toolsMenu);
 
             menu.Items.Add(new WinForms.ToolStripSeparator());
