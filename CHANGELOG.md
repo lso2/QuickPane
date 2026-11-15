@@ -7,7 +7,7 @@
 - Pressing the keyboard navigation shortcut in an Explorer window focuses the pane.
 - Pressing the arrow keys and Enter in the pane moves through and opens folders.
 - Pinned folders appear in the navigation pane of QuickPane's own file and folder pickers.
-- A unit-test project and a GitHub Actions workflow for building and testing every push and pull request.
+- A unit-test project and a GitHub Actions workflow for building and testing on demand.
 
 ### Changed
 - Clicking "Add folder..." or the groups folder button opens the Explorer-style folder picker.

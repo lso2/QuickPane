@@ -316,7 +316,7 @@ QuickPane/
 ├── Installer.iss              # Inno Setup installer script
 ├── CHANGELOG.md               # Version history
 ├── NOTICE.md                  # MIT notice for code ported from jprisant's fork
-├── .github/workflows/ci.yml   # Build and test on every push and pull request
+├── .github/workflows/ci.yml   # Build and test, started by hand from the Actions tab
 ├── scripts/                   # build.ps1 and test.ps1, the commands CI runs
 ├── tests/QuickPane.Tests/     # Unit tests (NUnit, .NET Framework 4.8)
 ├── docs/notes/                # Per-file notes: measurements and decisions

@@ -1,13 +1,11 @@
 # ci.yml
-# Purpose: builds QuickPane and runs the unit tests on every push to main and every pull request.
-# Reason: a failing build or test shows on the commit or pull request that introduced it.
+# Purpose: builds QuickPane and runs the unit tests when started from the Run workflow button on the Actions tab.
+# Reason: checks a commit's build and tests on a clean Windows runner, on request.
 # Origin: from jprisant's fork, commits 310a539, ed9964b, 452a8ca and fdc5607 (MIT, see NOTICE.md).
 # Doc: docs/notes/.github/workflows/ci.yml.md
 name: ci
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 # Token permission: read access to the code, for checkout.
 permissions:
   contents: read
