@@ -32,7 +32,7 @@
 
 ### Fixed
 - Dropping a pin, or a folder from Explorer, on a tab other than the active one places it in that tab.
-- Clicking a pin to a folder with a dot in its name, such as `.claude` or `lxx.plexpixel.com`, opens it in the same window.
+- Clicking a pin to a folder with a dot in its name opens it in the same window.
 - A beside pane appears for Save and Open dialogs too wide for the inside pane.
 - App Folders and "Always start {app} here" appear in a dialog's beside pane after it replaces the inside pane.
 - Browser rows in Recent Apps list their profiles while the browser is running.
