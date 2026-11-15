@@ -42,11 +42,16 @@ namespace QuickPane.UI
             var menu = new ContextMenu();
             menu.Items.Add(Item("Rename tab", () => RenameTab(tab)));
             menu.Items.Add(new Separator());
+            // Pins from these 2 items go into the right-clicked tab. The group menu adds to the active
+            // tab only, and in a group with several tabs it opens from the strip past the last tab.
+            menu.Items.Add(Item("Add folder...", () => { var p = PickFolder(); if (!string.IsNullOrEmpty(p)) App.Groups.AddPin(tab, p); }));
+            menu.Items.Add(Item("Add file...", () => { var p = PickFile(); if (!string.IsNullOrEmpty(p)) App.Groups.AddPin(tab, p); }));
+            menu.Items.Add(new Separator());
             menu.Items.Add(Item("Move tab left", () => App.Groups.MoveTab(group, tab, -1)));
             menu.Items.Add(Item("Move tab right", () => App.Groups.MoveTab(group, tab, +1)));
             menu.Items.Add(Item("Make tab its own group", () => App.Groups.MoveTabToNewGroup(group, tab)));
             menu.Items.Add(new Separator());
-            menu.Items.Add(Item("Delete tab", () => App.Groups.DeleteTab(group, tab)));
+            menu.Items.Add(Item("Delete tab", () => ConfirmDeleteTab(group, tab)));
             return menu;
         }
 
@@ -130,6 +135,20 @@ namespace QuickPane.UI
             App.Groups.DeleteGroup(group);
         }
 
+        // Shows a Yes/No confirmation first when the tab has pins.
+        private void ConfirmDeleteTab(PinnedGroup group, PinnedTab tab)
+        {
+            int count = tab.Items.Count;
+            if (count > 0)
+            {
+                var r = WinForms.MessageBox.Show(
+                    "Delete this tab and its " + count + " pin(s)?", "QuickPane",
+                    WinForms.MessageBoxButtons.YesNo, WinForms.MessageBoxIcon.Warning);
+                if (r != WinForms.DialogResult.Yes) return;
+            }
+            App.Groups.DeleteTab(group, tab);
+        }
+
         private void RenameGroupOrTab(PinnedGroup group, PinnedTab tab)
         {
             if (group.Tabs.Count == 1) RenameGroupSingle(group);
@@ -158,16 +177,13 @@ namespace QuickPane.UI
 
         private static string PickFolder()
         {
-            using (var dlg = new WinForms.FolderBrowserDialog())
-            {
-                dlg.Description = "Pick a folder to pin";
-                return dlg.ShowDialog() == WinForms.DialogResult.OK ? dlg.SelectedPath : null;
-            }
+            return FolderPicker.Pick("Pick a folder to pin");
         }
 
         private static string PickFile()
         {
             var dlg = new Microsoft.Win32.OpenFileDialog { Title = "Pick a file to pin" };
+            PickerPlaces.AddTo(dlg);
             return dlg.ShowDialog() == true ? dlg.FileName : null;
         }
 

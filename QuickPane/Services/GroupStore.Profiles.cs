@@ -63,9 +63,8 @@ namespace QuickPane.Services
         }
 
         /// <summary>
-        /// Send a group's folder to the Recycle Bin rather than erasing it. Deleting a group takes every
-        /// pin in it with it, so the delete has to be one a person can take back from the desktop the way
-        /// they take back any other deleted folder.
+        /// Send a group or tab folder, with every pin in it, to the Recycle Bin. A person can restore it
+        /// from there.
         /// </summary>
         internal static void Recycle(string folder)
         {
@@ -93,7 +92,7 @@ namespace QuickPane.Services
                 }
                 finally { Marshal.FreeHGlobal(buffer); }
             }
-            catch (Exception ex) { Log.Error("delete group folder '" + folder + "'", ex); }
+            catch (Exception ex) { Log.Error("recycle folder '" + folder + "'", ex); }
         }
 
         /// <summary>Move a group folder into another profile's groups root (drag between columns).</summary>

@@ -108,6 +108,11 @@ namespace QuickPane.Interop
         [DllImport("user32.dll")]
         public static extern IntPtr GetForegroundWindow();
 
+        // The active window of the calling thread's own queue. WinForms' common dialogs take their owner
+        // from it when none is given, and FolderPicker does the same.
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetActiveWindow();
+
         [DllImport("user32.dll")]
         public static extern bool SetForegroundWindow(IntPtr hWnd);
 

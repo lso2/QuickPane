@@ -220,7 +220,7 @@ namespace QuickPane
             _hotkeys.Apply(s.KeyboardNav, s.KeyboardNavHotkey);
         }
 
-        /// <summary>Put focus in the pane belonging to whatever dialog is in front.</summary>
+        /// <summary>Put focus in the pane of the dialog or Explorer window in front.</summary>
         private void FocusPaneFromHotkey()
         {
             Dispatcher.BeginInvoke(new Action(() =>
@@ -229,6 +229,8 @@ namespace QuickPane
                 {
                     var fg = Interop.NativeMethods.GetForegroundWindow();
                     if (_dialogPanes != null && _dialogPanes.FocusPaneFor(fg)) return;
+                    if (_watcher != null && _watcher.FocusPaneFor(fg)) return;
+                    if (_follower != null && _follower.FocusPaneFor(fg)) return;
                     Log.Info("keyboard navigation shortcut pressed with no pane on the window in front.");
                 }
                 catch (Exception ex) { Log.Error("focus pane hotkey", ex); }

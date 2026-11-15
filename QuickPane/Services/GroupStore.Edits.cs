@@ -166,7 +166,8 @@ namespace QuickPane.Services
             Try(() =>
             {
                 if (group.Tabs.Count <= 1) { DeleteGroup(group); return; } // last tab: drop the group
-                if (Directory.Exists(tab.FolderPath)) Directory.Delete(tab.FolderPath, true);
+                // A deleted tab is sent to the Recycle Bin with its pins, through the same Recycle call as a deleted group.
+                Recycle(tab.FolderPath);
             });
         }
 

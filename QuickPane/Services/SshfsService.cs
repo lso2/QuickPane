@@ -1,3 +1,8 @@
+// SshfsService.cs
+// Purpose: mounts and unmounts SSH folders with sshfs-win, and builds their command lines.
+// Reason: the SSH section's connect and disconnect run through one service.
+// Defines: SshfsService.
+// Doc: docs/notes/QuickPane/Services/SshfsService.cs.md
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -125,7 +130,7 @@ namespace QuickPane.Services
         /// <summary>Join arguments into one command line. .NET Framework exposes only the single
         /// Arguments string, so each value is quoted here under the rules the C runtime uses to split it
         /// again, which keeps a key path or a volume name containing spaces intact.</summary>
-        private static string BuildCommandLine(List<string> args)
+        internal static string BuildCommandLine(List<string> args)
         {
             var sb = new System.Text.StringBuilder();
             foreach (var a in args)

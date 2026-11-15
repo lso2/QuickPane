@@ -67,6 +67,13 @@ namespace QuickPane.UI
         /// <summary>The text this row shows, which is what the pane's search box filters on.</summary>
         public string LabelText { get; private set; }
 
+        /// <summary>Open the row the way a click does, for Enter in the pane's search box.</summary>
+        internal void Activate()
+        {
+            var h = Clicked;
+            if (h != null) h();
+        }
+
         public void Bind(string display, string targetPath, bool exists, bool isFile = false)
         {
             LabelText = display;

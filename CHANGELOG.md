@@ -1,5 +1,25 @@
 # Changelog
 
+## [3.12.0] - 2026-11-15
+
+### Added
+- A tab's right-click menu has "Add folder..." and "Add file..." for pinning into that tab.
+- Pressing the keyboard navigation shortcut in an Explorer window focuses the pane.
+- Pressing the arrow keys and Enter in the pane moves through and opens folders.
+- Pinned folders appear in the navigation pane of QuickPane's own file and folder pickers.
+- A unit-test project and a GitHub Actions workflow for building and testing every push and pull request.
+
+### Changed
+- Clicking "Add folder..." or the groups folder button opens the Explorer-style folder picker.
+- Deleting a tab with pins shows a confirmation, and deleted tabs are sent to the Recycle Bin.
+- The Buy me a coffee buttons show a coffee cup.
+
+### Fixed
+- Every tab in a Windows 11 Explorer window is placed beside the inside pane.
+
+### Contributors
+- jprisant: the tab menu pins, the folder picker, Delete tab, the Windows 11 tabs, the pins in QuickPane's own pickers, and the tests and CI, ported from his fork.
+
 ## [3.11.0] - 2026-11-14
 
 ### Added

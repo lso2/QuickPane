@@ -151,6 +151,15 @@ namespace QuickPane.Explorer
             PositionAll();
         }
 
+        /// <summary>Move keyboard focus into the beside pane of the Explorer window in front, for the
+        /// keyboard navigation shortcut. False when that window has no pane here.</summary>
+        public bool FocusPaneFor(IntPtr window)
+        {
+            FollowerPane pane;
+            if (window == IntPtr.Zero || !_panes.TryGetValue(window, out pane)) return false;
+            return pane.Sidebar != null && pane.Sidebar.FocusPane();
+        }
+
         public void Dispose()
         {
             try { _sweep?.Stop(); } catch { }

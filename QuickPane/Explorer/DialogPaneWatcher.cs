@@ -54,15 +54,27 @@ namespace QuickPane.Explorer
                 v.IsDialog = DialogNavigator.IsFileDialog(hwnd);
                 return v.IsDialog;
             }
-            if (NM.ClassOf(hwnd) != "#32770")
+            if (NM.ClassOf(hwnd) != "#32770" || IsOwnDialog(hwnd))
             {
                 // Cheap class miss: cache as final so plain windows are never enumerated at all.
+                // QuickPane's own pickers are final misses too (IsOwnDialog).
                 _verdicts[hwnd] = new Verdict { IsDialog = false, Tick = Environment.TickCount, Rechecks = 6 };
                 return false;
             }
             var isDialog = DialogNavigator.IsFileDialog(hwnd);
             _verdicts[hwnd] = new Verdict { IsDialog = isDialog, Tick = Environment.TickCount };
             return isDialog;
+        }
+
+        private static readonly uint OwnPid = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+
+        // QuickPane's own pickers show the pins in their navigation pane (PickerPlaces). The window event
+        // hooks skip this process, and a pane attached to one of its dialogs would get no move or size events.
+        private static bool IsOwnDialog(IntPtr hwnd)
+        {
+            uint pid;
+            NM.GetWindowThreadProcessId(hwnd, out pid);
+            return pid != 0 && pid == OwnPid;
         }
 
         private void ForgetWindow(IntPtr hwnd)
@@ -306,7 +318,7 @@ namespace QuickPane.Explorer
             try
             {
                 NM.SetFocus(paneHandle);
-                if (sidebar != null) sidebar.FocusSearch();
+                if (sidebar != null) sidebar.FocusPane();
             }
             finally { if (attached) NM.AttachThreadInput(ours, theirs, false); }
             return true;

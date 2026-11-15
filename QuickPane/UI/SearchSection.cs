@@ -1,3 +1,8 @@
+// SearchSection.cs
+// Purpose: the pane's filter box, for filtering the rows already on screen while typing.
+// Reason: filtering the rows in memory is instant at any number of pins and needs no disk search.
+// Defines: SearchSection.
+// Doc: docs/notes/QuickPane/UI/SearchSection.cs.md
 using System;
 using System.Windows;
 using System.Windows.Controls;
@@ -104,6 +109,12 @@ namespace QuickPane.UI
                 _box.Text = "";
                 e.Handled = true;
             }
+        }
+
+        /// <summary>True when d is this section's text box, for the pane's arrow-key routing.</summary>
+        internal bool Owns(DependencyObject d)
+        {
+            return d != null && ReferenceEquals(d, _box);
         }
 
         /// <summary>Put the caret in the box, for the keyboard shortcut that jumps to the pane.</summary>

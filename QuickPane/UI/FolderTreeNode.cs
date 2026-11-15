@@ -42,6 +42,7 @@ namespace QuickPane.UI
         private readonly PinDropContext _pinContext;
         private readonly Func<int, List<FrameworkElement>> _childProvider;
         private readonly Action _onClick;
+        private readonly Action _activate;    // the row's action, run by clicking the row or pressing Enter on it
         private bool _loaded;
         private bool _expanded;
         private bool _middlePressed;
@@ -130,11 +131,11 @@ namespace QuickPane.UI
             _row.MouseEnter += (s, e) => { _row.Background = UiHelpers.AppBrush("ItemHoverBackground"); if (_hasChildren) _chevGlyph.Opacity = 1; };
             _row.MouseLeave += (s, e) =>
             {
-                _row.Background = Brushes.Transparent;
+                _row.Background = _row.IsKeyboardFocused ? UiHelpers.AppBrush("ItemHoverBackground") : Brushes.Transparent;
                 _middlePressed = false;
                 if (!_expanded && _childProvider == null) _chevGlyph.Opacity = 0;
             };
-            _row.MouseLeftButtonUp += (s, e) =>
+            _activate = () =>
             {
                 if (_onClick != null) { _onClick(); return; }
                 // A row built before its target was probed can carry a stale "file", and opening a folder
@@ -143,6 +144,7 @@ namespace QuickPane.UI
                 if (exists && !fileNow) _navigate(path);
                 else if (fileNow) Open(path);
             };
+            _row.MouseLeftButtonUp += (s, e) => _activate();
             // Middle-clicking a folder row opens it in a new Explorer window. With QTTabBar's window capture on, that window appears as a new tab.
             _row.MouseDown += (s, e) => { if (e.ChangedButton == MouseButton.Middle) { _middlePressed = true; e.Handled = true; } };
             _row.MouseUp += (s, e) =>
@@ -154,6 +156,19 @@ namespace QuickPane.UI
                 if (pressedHere && _onClick == null && exists && !isFile) ExplorerNavigator.OpenNewWindow(path);
             };
             if (level > 0 && onClick == null) _row.ContextMenu = BasicMenu(path, isFile);
+
+            // Keyboard: pressing Up or Down moves focus between rows (SidebarControl.Keyboard.cs). Pressing
+            // Enter or Space opens the row, Right expands it, and Left collapses it.
+            _row.Focusable = true;
+            _row.FocusVisualStyle = null;
+            _row.GotKeyboardFocus += (s, e) => _row.Background = UiHelpers.AppBrush("ItemHoverBackground");
+            _row.LostKeyboardFocus += (s, e) => { if (!_row.IsMouseOver) _row.Background = Brushes.Transparent; };
+            _row.KeyDown += (s, e) =>
+            {
+                if (e.Key == Key.Enter || e.Key == Key.Space) { _activate(); e.Handled = true; }
+                else if (e.Key == Key.Right && _hasChildren && !_expanded) { Toggle(); e.Handled = true; }
+                else if (e.Key == Key.Left && _expanded) { Toggle(); e.Handled = true; }
+            };
 
             // Items dropped from Explorer onto a real folder move/copy/link into it (or pin), below.
             if (!isFile && exists && childProvider == null && onClick == null && !ShellFolders.NeedsShell(path))
@@ -285,6 +300,9 @@ namespace QuickPane.UI
             menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
             menu.IsOpen = true;
         }
+
+        /// <summary>Open the row the way a click does, for Enter in the pane's search box.</summary>
+        internal void Activate() { _activate(); }
 
         // ---- expand / children -------------------------------------------------
 

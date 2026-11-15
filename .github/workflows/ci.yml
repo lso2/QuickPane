@@ -1,0 +1,27 @@
+# ci.yml
+# Purpose: builds QuickPane and runs the unit tests on every push to main and every pull request.
+# Reason: a failing build or test shows on the commit or pull request that introduced it.
+# Origin: from jprisant's fork, commits 310a539, ed9964b, 452a8ca and fdc5607 (MIT, see NOTICE.md).
+# Doc: docs/notes/.github/workflows/ci.yml.md
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+# Token permission: read access to the code, for checkout.
+permissions:
+  contents: read
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+      - name: Build the app
+        shell: pwsh
+        run: ./scripts/build.ps1 -Configuration Release
+      - name: Run the tests
+        shell: pwsh
+        run: ./scripts/test.ps1 -Configuration Release -NoBuild

@@ -1,3 +1,8 @@
+// SidebarControl.xaml.cs
+// Purpose: the pane's root control: builds the sections, rebuilds on data and settings changes, collapse and resize.
+// Reason: every host (Explorer window, beside window, dialog, desktop dock) shows this one control.
+// Defines: SidebarControl (partial). Keyboard navigation is in SidebarControl.Keyboard.cs.
+// Doc: docs/notes/QuickPane/UI/SidebarControl.xaml.cs.md
 using System;
 using System.Diagnostics;
 using System.Linq;
@@ -58,6 +63,7 @@ namespace QuickPane.UI
 
             AddHandler(ContextMenuOpeningEvent, new ContextMenuEventHandler((s, e) => SuppressAutoHide = true), true);
             AddHandler(ContextMenuClosingEvent, new ContextMenuEventHandler((s, e) => SuppressAutoHide = false), true);
+            WireKeyboard();
 
             PreviewMouseWheel += OnWheel;
             Loaded += (s, e) => { Wire(); HookHWheel(); };
@@ -585,179 +591,6 @@ namespace QuickPane.UI
         private void OnResizeCompleted(object sender, DragCompletedEventArgs e)
         {
             if (App.Settings != null) App.Settings.Save(); // persist the final width
-        }
-    }
-
-    /// <summary>Shared UI helpers: section separators, headers, and expand/collapse animation.</summary>
-    internal static class UiHelpers
-    {
-        public const string SeparatorTag = "qp-separator";
-
-        /// <summary>Marks a header and the rows under it as one thing, so filtering never leaves a
-        /// heading standing over nothing.</summary>
-        public const string FilterBlockTag = "qp-block";
-
-        public static Border MakeSeparator()
-        {
-            return new Border
-            {
-                Height = 1,
-                Margin = new Thickness(8, 6, 8, 6),
-                Background = AppBrush("SeparatorColor"),
-                Tag = SeparatorTag   // a rule between rows means nothing once the rows are filtered out
-            };
-        }
-
-        public static Brush AppBrush(string key)
-        {
-            var b = Application.Current != null ? Application.Current.TryFindResource(key) as Brush : null;
-            return b ?? Brushes.Gray;
-        }
-
-        /// <summary>
-        /// Build a section/group header: a left chevron (revealed on hover) plus an uppercase label.
-        /// Single click anywhere on the header toggles expand/collapse. Double click invokes
-        /// onDoubleClick (used to rename), and a short timer keeps the two from firing together.
-        /// </summary>
-        public static Grid BuildHeader(string text, Action toggleClicked, Action onDoubleClick, out RotateTransform chevron, out TextBlock label)
-        {
-            var grid = new Grid { Margin = new Thickness(0) };
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-            chevron = new RotateTransform(0);
-            var glyph = new TextBlock
-            {
-                Text = "", // Segoe MDL2 ChevronRight, rotates to point down when expanded
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                FontSize = 10,
-                Opacity = 1,   // always shown, so a section reads as collapsible before it is hovered
-                Foreground = AppBrush("ChevronColor"),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                RenderTransformOrigin = new Point(0.5, 0.5),
-                RenderTransform = chevron
-            };
-            var chevronHit = new Border
-            {
-                Width = 22,
-                Background = Brushes.Transparent,
-                Cursor = System.Windows.Input.Cursors.Hand,
-                Child = glyph
-            };
-            Grid.SetColumn(chevronHit, 0);
-            grid.Children.Add(chevronHit);
-
-            label = new TextBlock
-            {
-                Text = (text ?? string.Empty).ToUpperInvariant(),
-                FontSize = 11,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = AppBrush("TextSecondary"),
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(2, 0, 8, 0),
-                TextTrimming = TextTrimming.CharacterEllipsis
-            };
-            Grid.SetColumn(label, 1);
-            grid.Children.Add(label);
-
-            grid.Margin = new Thickness(6, 6, 8, 4);
-            grid.MouseEnter += (s, e) => glyph.Opacity = 1;
-            grid.Background = Brushes.Transparent;
-            grid.Cursor = System.Windows.Input.Cursors.Hand;
-
-            // Single click toggles; double click renames. The timer lets a single click settle so the
-            // first click of a double-click does not also toggle.
-            var dcTimer = new System.Windows.Threading.DispatcherTimer
-            { Interval = TimeSpan.FromMilliseconds(220) };
-            dcTimer.Tick += (s, e) => { dcTimer.Stop(); if (toggleClicked != null) toggleClicked(); };
-
-            grid.PreviewMouseLeftButtonDown += (s, e) =>
-            {
-                if (e.ClickCount == 2 && onDoubleClick != null)
-                {
-                    dcTimer.Stop();
-                    e.Handled = true;
-                    onDoubleClick();
-                }
-            };
-            grid.MouseLeftButtonUp += (s, e) =>
-            {
-                if (onDoubleClick == null) { if (toggleClicked != null) toggleClicked(); return; }
-                if (!dcTimer.IsEnabled) dcTimer.Start();
-            };
-            return grid;
-        }
-
-        /// <summary>Swap an element for a TextBox to rename it in place. Enter commits, Escape cancels.</summary>
-        public static void InlineRename(Panel parent, UIElement target, string initial, Action<string> onCommit, Action onCancel)
-        {
-            int idx = parent.Children.IndexOf(target);
-            if (idx < 0) return;
-
-            var tb = new TextBox
-            {
-                Text = initial ?? string.Empty,
-                FontSize = 12,
-                Margin = new Thickness(8, 2, 8, 2)
-            };
-            bool finished = false;
-
-            Action cancel = () => { if (finished) return; finished = true; onCancel(); };
-            Action commit = () =>
-            {
-                if (finished) return;
-                finished = true;
-                var v = tb.Text;
-                onCommit(v);
-            };
-
-            tb.KeyDown += (s, e) =>
-            {
-                if (e.Key == System.Windows.Input.Key.Enter) { e.Handled = true; commit(); }
-                else if (e.Key == System.Windows.Input.Key.Escape) { e.Handled = true; cancel(); }
-            };
-            tb.LostKeyboardFocus += (s, e) => cancel();
-
-            parent.Children.Remove(target);
-            parent.Children.Insert(idx, tb);
-            tb.Focus();
-            tb.SelectAll();
-        }
-
-        /// <summary>Animate a panel open/closed via MaxHeight, and rotate the matching chevron.</summary>
-        public static void ToggleExpand(FrameworkElement panel, RotateTransform chevron, bool expand)
-        {
-            var dur = TimeSpan.FromMilliseconds(150);
-            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
-
-            if (chevron != null)
-            {
-                var rot = new DoubleAnimation(chevron.Angle, expand ? 90 : 0, dur) { EasingFunction = ease };
-                chevron.BeginAnimation(RotateTransform.AngleProperty, rot);
-            }
-
-            // Use FillBehavior.Stop so the animated value reverts to the base MaxHeight we set
-            // explicitly. Relying on a Completed handler to clear MaxHeight is fragile, because a
-            // replaced animation may never raise Completed, which left a section stuck closed.
-            if (expand)
-            {
-                panel.Visibility = Visibility.Visible;
-                panel.MaxHeight = double.PositiveInfinity; // base value: fully open after the animation
-                panel.Measure(new Size(panel.ActualWidth > 0 ? panel.ActualWidth : double.PositiveInfinity, double.PositiveInfinity));
-                double target = panel.DesiredSize.Height;
-                if (target <= 0) { panel.BeginAnimation(FrameworkElement.MaxHeightProperty, null); return; }
-                var anim = new DoubleAnimation(0, target, dur) { EasingFunction = ease, FillBehavior = FillBehavior.Stop };
-                panel.BeginAnimation(FrameworkElement.MaxHeightProperty, anim);
-            }
-            else
-            {
-                double from = panel.ActualHeight;
-                panel.MaxHeight = 0; // base value: closed after the animation
-                var anim = new DoubleAnimation(from, 0, dur) { EasingFunction = ease, FillBehavior = FillBehavior.Stop };
-                anim.Completed += (s, e) => { if (panel.MaxHeight == 0) panel.Visibility = Visibility.Collapsed; };
-                panel.BeginAnimation(FrameworkElement.MaxHeightProperty, anim);
-            }
         }
     }
 }

@@ -1,4 +1,11 @@
+// ExplorerWindow.cs
+// Purpose: one Explorer window's embedded pane: a WPF HwndSource reparented into CabinetWClass, with every content host shifted right.
+// Reason: inside mode draws the pane in Explorer's own window, and Explorer resets its content hosts to full width on every relayout.
+// Defines: ExplorerWindow.
+// Origin: the Windows 11 tab handling is ported from jprisant's fork, commits 8842577 and 05ef6f3 (MIT, see NOTICE.md).
+// Doc: docs/notes/QuickPane/Explorer/ExplorerWindow.cs.md
 using System;
+using System.Collections.Generic;
 using System.Text;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -10,16 +17,19 @@ using NM = QuickPane.Interop.NativeMethods;
 namespace QuickPane.Explorer
 {
     /// <summary>
-    /// Owns the embedded sidebar for a single Explorer window. It reparents a WPF HwndSource as a
-    /// child of the CabinetWClass window and shifts Explorer's content host (ShellTabWindowClass) to
-    /// the right by the sidebar width. Layout is reapplied whenever Explorer relays out, because
-    /// Explorer restores its content host to full width on every resize.
+    /// The embedded sidebar for a single Explorer window. A WPF HwndSource is reparented as a child of
+    /// the CabinetWClass window, and Explorer's content hosts (one ShellTabWindowClass per tab on
+    /// Windows 11) are shifted right by the sidebar width. Explorer puts its content hosts back at full
+    /// width on every resize, and the layout is reapplied each time.
     /// </summary>
     internal sealed class ExplorerWindow : IDisposable
     {
+        private const string TabClass = "ShellTabWindowClass";
+
         private readonly IntPtr _cabinet;
         private readonly Action<string> _navOverride;
-        private IntPtr _contentHost;
+        private IntPtr _contentHost;      // the host found at attach, and the only host in the fallback layout
+        private bool _tabbed;             // true when the content is in ShellTabWindowClass children
         private HwndSource _host;
         private IntPtr _hostHandle; // cached so the background enforcer never touches WPF objects
         private SidebarControl _sidebar;
@@ -44,8 +54,51 @@ namespace QuickPane.Explorer
         }
 
         public IntPtr Cabinet { get { return _cabinet; } }
-        public IntPtr ContentHost { get { return _contentHost; } }
         public bool Attached { get { return _host != null; } }
+
+        /// <summary>True when hwnd is one of this window's content hosts, including a tab opened after
+        /// attach. The watcher calls this only for children of this cabinet, and the class lookup is not
+        /// run for location events from other windows.</summary>
+        public bool IsContentHost(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return false;
+            if (hwnd == _contentHost) return true;
+            return _tabbed && NM.GetParent(hwnd) == _cabinet && NM.ClassOf(hwnd) == TabClass;
+        }
+
+        /// <summary>
+        /// Walk this window's content hosts: IntPtr.Zero for the first, then the previous host. Windows 11
+        /// gives every Explorer tab its own ShellTabWindowClass child, all visible, with the active tab on
+        /// top. Shifting only the one found at attach left every other tab at full width, over or under
+        /// the pane (lso2/QuickPane#3). Tabs open and close during the window's lifetime, and the walk
+        /// runs live on every pass. FindWindowEx allocates nothing, and the enforcer thread walks at its burst
+        /// rate. A tab closed mid-walk ends the walk early, and every tab is shifted on the next pass.
+        /// </summary>
+        private IntPtr NextContentHost(IntPtr after)
+        {
+            if (_tabbed) return NM.FindWindowEx(_cabinet, after, TabClass, null);
+            return after == IntPtr.Zero && NM.IsWindow(_contentHost) ? _contentHost : IntPtr.Zero;
+        }
+
+        // The hosts of one ApplyLayout pass, walked once and reused to measure, check and move.
+        // Used on the UI thread only. EnforceFast on the enforcer thread walks the hosts live.
+        private readonly List<IntPtr> _passHosts = new List<IntPtr>(4);
+        private bool _inPass;
+
+        private void CollectContentHosts(List<IntPtr> into)
+        {
+            into.Clear();
+            for (var c = NextContentHost(IntPtr.Zero); c != IntPtr.Zero; c = NextContentHost(c)) into.Add(c);
+        }
+
+        /// <summary>Put the keyboard in this window's pane, for the keyboard navigation shortcut. A
+        /// collapsed strip opens first.</summary>
+        public bool FocusPane()
+        {
+            if (_sidebar == null || !_ready) return false;
+            if (_collapsed) ToggleCollapsed();
+            return _sidebar.FocusPane();
+        }
 
         public ExplorerWindow(IntPtr cabinet, Action<string> navigate = null)
         {
@@ -61,6 +114,7 @@ namespace QuickPane.Explorer
 
             _contentHost = FindContentHost(_cabinet);
             if (_contentHost == IntPtr.Zero) return false; // children not ready yet, caller retries
+            _tabbed = NM.ClassOf(_contentHost) == TabClass;
 
             try
             {
@@ -132,11 +186,25 @@ namespace QuickPane.Explorer
             }
         }
 
-        /// <summary>Reposition the content host and the sidebar. Called on attach and on relayout.</summary>
+        /// <summary>Reposition the content hosts and the sidebar. Called on attach and on relayout.</summary>
         public void ApplyLayout()
         {
+            // A re-entered pass would refill _passHosts while the first pass still reads it. The next
+            // event or sweep catches up.
+            if (_inPass) return;
+            _inPass = true;
+            try { ApplyLayoutPass(); }
+            finally { _inPass = false; }
+        }
+
+        private void ApplyLayoutPass()
+        {
             if (_applying || _host == null) return;
-            if (!NM.IsWindow(_cabinet) || !NM.IsWindow(_contentHost)) return;
+            if (!NM.IsWindow(_cabinet)) return;
+            // A tab that closes after this walk makes only its own SetWindowPos fail, and the next pass
+            // walks again.
+            CollectContentHosts(_passHosts);
+            if (_passHosts.Count == 0) return;
 
             NM.RECT client;
             if (!NM.GetClientRect(_cabinet, out client)) return;
@@ -145,7 +213,7 @@ namespace QuickPane.Explorer
             int width = EffWidth();
             if (w <= width + 40 || h <= 0) return; // too small to split sanely
 
-            int top = MeasureContentTop(client);
+            int top = MeasureContentTop(client, _passHosts);
 
             // Hold everything until the window is actually presented and its toolbar has laid out.
             // Attaching mid-load measured contentTop as 0, which placed the strip over the toolbar and
@@ -169,9 +237,10 @@ namespace QuickPane.Explorer
             int sidebarX = 0, sidebarY = top, sidebarW = width, sidebarH = contentH;
             int contentX = width, contentY = top, contentW = w - width, contentH2 = contentH;
 
-            // Skip if already where we want it (within tolerance) so we do not fight Explorer's own
-            // identical relayout and create a feedback loop.
-            if (ContentAlreadyPlaced(contentX, contentY, contentW, contentH2)) return;
+            // Skip when every host is already within tolerance. Moving a host that is already placed
+            // starts a feedback loop with Explorer's own identical relayout. Each of our own moves raises
+            // a location event, and the ApplyLayout call from that event returns here.
+            if (AllContentPlaced(_passHosts, contentX, contentY, contentW, contentH2)) return;
 
             bool verbose = _logCount < 3;
             if (verbose)
@@ -185,13 +254,17 @@ namespace QuickPane.Explorer
             _applying = true;
             try
             {
-                // Two independent SetWindowPos calls, NOT a DeferWindowPos batch. DeferWindowPos
-                // cannot combine windows from different threads, and Explorer's content host lives in
-                // another process, so a batch silently fails and nothing moves. Separate calls each
-                // succeed: the content host shifts right, and our sidebar is forced to the TOP so
-                // Explorer's content can never paint over it (SetParent leaves it at the bottom).
-                NM.SetWindowPos(_contentHost, IntPtr.Zero, contentX, contentY, contentW, contentH2,
-                    NM.SWP_NOZORDER | NM.SWP_NOACTIVATE | NM.SWP_DEFERERASE);
+                // Independent SetWindowPos calls, not a DeferWindowPos batch. DeferWindowPos cannot
+                // combine windows from different threads. Explorer's content hosts belong to another
+                // process, and a batch fails silently with nothing moved. With separate calls, every host out
+                // of place is moved right, and the sidebar is placed at the top of the z-order above
+                // Explorer's content. SetParent puts the sidebar at the bottom of the z-order.
+                foreach (var c in _passHosts)
+                {
+                    if (!NeedsMove(c, contentX, contentY, contentW, contentH2)) continue;
+                    NM.SetWindowPos(c, IntPtr.Zero, contentX, contentY, contentW, contentH2,
+                        NM.SWP_NOZORDER | NM.SWP_NOACTIVATE | NM.SWP_DEFERERASE);
+                }
                 NM.SetWindowPos(_host.Handle, NM.HWND_TOP, sidebarX, sidebarY, sidebarW, sidebarH,
                     NM.SWP_NOACTIVATE | NM.SWP_DEFERERASE);
             }
@@ -208,7 +281,7 @@ namespace QuickPane.Explorer
             {
                 NM.RECT hr, cr;
                 NM.GetWindowRect(_host.Handle, out hr);
-                NM.GetWindowRect(_contentHost, out cr);
+                NM.GetWindowRect(_passHosts[0], out cr);
                 Log.Info("  post-layout hostHwnd=" + _host.Handle.ToString("X") +
                          " hostScreenRect=(" + hr.Left + "," + hr.Top + " " + hr.Width + "x" + hr.Height + ")" +
                          " hostVisible=" + NM.IsWindowVisible(_host.Handle) +
@@ -231,7 +304,7 @@ namespace QuickPane.Explorer
             if (_disposed || host == IntPtr.Zero) return;
             if (!_ready) return; // nothing is shifted or shown until the window is presented
             if (_applying) return;
-            if (!NM.IsWindow(_cabinet) || !NM.IsWindow(_contentHost)) return;
+            if (!NM.IsWindow(_cabinet)) return;
 
             NM.RECT client;
             if (!NM.GetClientRect(_cabinet, out client)) return;
@@ -240,9 +313,10 @@ namespace QuickPane.Explorer
             if (w <= width + 40 || h <= 0) return;
             int contentH = h - top;
 
-            if (!RectMatches(_contentHost, width, top, w - width, contentH))
+            for (var c = NextContentHost(IntPtr.Zero); c != IntPtr.Zero; c = NextContentHost(c))
             {
-                NM.SetWindowPos(_contentHost, IntPtr.Zero, width, top, w - width, contentH,
+                if (!NeedsMove(c, width, top, w - width, contentH)) continue;
+                NM.SetWindowPos(c, IntPtr.Zero, width, top, w - width, contentH,
                     NM.SWP_NOZORDER | NM.SWP_NOACTIVATE | NM.SWP_DEFERERASE);
             }
             if (!RectMatches(host, 0, top, width, contentH))
@@ -262,32 +336,54 @@ namespace QuickPane.Explorer
             return Near(tl.X, x) && Near(tl.Y, y) && Near(r.Width, cx) && Near(r.Height, cy);
         }
 
-        private bool ContentAlreadyPlaced(int x, int y, int cx, int cy)
+        // True when a content host is somewhere other than (x,y,cx,cy). A tab Explorer has not sized yet
+        // is skipped. Its first layout raises a location event, and ApplyLayout runs again from that event.
+        private bool NeedsMove(IntPtr hwnd, int x, int y, int cx, int cy)
         {
             NM.RECT r;
-            if (!NM.GetWindowRect(_contentHost, out r)) return false;
+            if (!NM.GetWindowRect(hwnd, out r) || r.Width <= 0 || r.Height <= 0) return false;
             var tl = new NM.POINT { X = r.Left, Y = r.Top };
             NM.ScreenToClient(_cabinet, ref tl);
-            return Near(tl.X, x) && Near(tl.Y, y) && Near(r.Width, cx) && Near(r.Height, cy);
+            return !(Near(tl.X, x) && Near(tl.Y, y) && Near(r.Width, cx) && Near(r.Height, cy));
+        }
+
+        private bool AllContentPlaced(List<IntPtr> hosts, int x, int y, int cx, int cy)
+        {
+            foreach (var c in hosts)
+            {
+                if (NeedsMove(c, x, y, cx, cy)) return false;
+            }
+            return true;
         }
 
         private static bool Near(int a, int b) { return Math.Abs(a - b) <= 2; }
 
-        // Content host top in cabinet client coordinates (below the toolbar/ribbon band).
+        // Content top in cabinet client coordinates (below the toolbar or ribbon), shared by every tab.
+        // The largest reading is used. A tab Explorer is still creating can be at the client's top edge
+        // for a moment, and using a 0 read from it would place the pane and every tab over the toolbar.
         private int MeasureContentTop(NM.RECT client)
         {
+            var hosts = new List<IntPtr>(4);
+            CollectContentHosts(hosts);
+            return MeasureContentTop(client, hosts);
+        }
+
+        private int MeasureContentTop(NM.RECT client, List<IntPtr> hosts)
+        {
+            int best = 0;
             try
             {
-                NM.RECT r;
-                if (NM.GetWindowRect(_contentHost, out r))
+                foreach (var c in hosts)
                 {
+                    NM.RECT r;
+                    if (!NM.GetWindowRect(c, out r) || r.Width <= 0 || r.Height <= 0) continue;
                     var tl = new NM.POINT { X = r.Left, Y = r.Top };
                     NM.ScreenToClient(_cabinet, ref tl);
-                    if (tl.Y >= 0 && tl.Y < client.Height) return tl.Y;
+                    if (tl.Y >= 0 && tl.Y < client.Height && tl.Y > best) best = tl.Y;
                 }
             }
             catch { }
-            return 0;
+            return best;
         }
 
         /// <summary>Find the child window that hosts the folder content, so we can shift it right.</summary>
@@ -336,17 +432,20 @@ namespace QuickPane.Explorer
                 App.Settings.WidthChangedLive -= OnSettingsChanged;
             }
 
-            // Restore Explorer's content host to full width so the window looks normal afterwards.
+            // Every content host goes back to full width, and the window looks as it did before the pane.
             try
             {
-                if (_ready && NM.IsWindow(_cabinet) && NM.IsWindow(_contentHost))
+                if (_ready && NM.IsWindow(_cabinet))
                 {
                     NM.RECT client;
                     if (NM.GetClientRect(_cabinet, out client))
                     {
                         int top = _contentTop;
-                        NM.SetWindowPos(_contentHost, IntPtr.Zero, 0, top, client.Width, client.Height - top,
-                            NM.SWP_NOZORDER | NM.SWP_NOACTIVATE);
+                        for (var c = NextContentHost(IntPtr.Zero); c != IntPtr.Zero; c = NextContentHost(c))
+                        {
+                            NM.SetWindowPos(c, IntPtr.Zero, 0, top, client.Width, client.Height - top,
+                                NM.SWP_NOZORDER | NM.SWP_NOACTIVATE);
+                        }
                     }
                 }
             }

@@ -1,3 +1,8 @@
+// SettingsStore.cs
+// Purpose: settings.json load, save and migration, with atomic temp-then-replace writes.
+// Reason: every saved setting is read and written through one store.
+// Defines: SettingsStore.
+// Doc: docs/notes/QuickPane/Services/SettingsStore.cs.md
 using System;
 using System.IO;
 using System.Runtime.Serialization.Json;
@@ -37,8 +42,15 @@ namespace QuickPane.Services
         private readonly string _file;
 
         public SettingsStore()
+            : this(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "QuickPane"))
         {
-            _dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "QuickPane");
+        }
+
+        /// <summary>A store in any folder. Tests round-trip settings in a temp folder with it, and the
+        /// person's own settings file is never touched.</summary>
+        internal SettingsStore(string dir)
+        {
+            _dir = dir;
             _file = Path.Combine(_dir, "settings.json");
         }
 

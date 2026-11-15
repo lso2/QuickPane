@@ -4,7 +4,7 @@
 ![.NET Framework](https://img.shields.io/badge/.NET%20Framework-4.8-512BD4.svg?logo=dotnet&logoColor=white)
 ![C#](https://img.shields.io/badge/C%23-7.3-239120.svg?logo=csharp&logoColor=white)
 ![UI](https://img.shields.io/badge/UI-WPF-1f6feb.svg)
-![Version](https://img.shields.io/badge/Version-3.11.0-success.svg)
+![Version](https://img.shields.io/badge/Version-3.12.0-success.svg)
 ![License](https://img.shields.io/badge/License-GPLv3-blue.svg)
 
 A folder sidebar for Windows File Explorer. QuickPane embeds a pinned-folders pane inside every Explorer window, so your groups, recent locations, drives, network shares, and WSL distros travel with the window you are already using. Pin it inside the window, float it beside the window, or run it as a slim screen-edge dock. Everything runs locally as a single tray app, no code is ever injected into Explorer, and all data stays in plain files under your user profile.
@@ -108,7 +108,12 @@ Right-click a folder while an app's Save or Open dialog is open and choose "Alwa
 
 ### Keyboard navigation
 
-An optional shortcut moves focus into the pane, where the arrow keys move between folders and Enter opens one. The shortcut is off by default and is switched on under Settings, Hotkeys.
+Pressing the optional shortcut puts keyboard focus in the pane of the Explorer window or Save or Open dialog in front, starting in the search box. The shortcut is off by default and is switched on under Settings, Hotkeys.
+
+- Pressing Down or Up moves between the folders on screen
+- Pressing Right or Left expands or collapses a folder
+- Pressing Enter opens the folder, and pressing Enter in the search box opens the first match
+- Pressing Escape returns to the search box
 
 ### Profiles
 
@@ -310,6 +315,10 @@ QuickPane/
 ├── QuickPane.sln              # Visual Studio solution
 ├── Installer.iss              # Inno Setup installer script
 ├── CHANGELOG.md               # Version history
+├── NOTICE.md                  # MIT notice for code ported from jprisant's fork
+├── .github/workflows/ci.yml   # Build and test on every push and pull request
+├── scripts/                   # build.ps1 and test.ps1, the commands CI runs
+├── tests/QuickPane.Tests/     # Unit tests (NUnit, .NET Framework 4.8)
 ├── docs/notes/                # Per-file notes: measurements and decisions
 ├── screens/                   # Screenshots used in this README
 └── QuickPane/
@@ -349,6 +358,8 @@ QuickPane/
     │   └── Log.cs
     └── UI/
         ├── SidebarControl.xaml(.cs)  # The pane shell
+        ├── SidebarControl.Keyboard.cs # Arrow keys, Enter and Escape in the pane
+        ├── UiHelpers.cs              # Separators, headers, expand animation
         ├── GroupSection.xaml(.cs)    # Groups section rows
         ├── GroupSection.Drop.cs      # Groups drag and drop
         ├── GroupSection.Menus.cs     # Groups right-click menus
@@ -357,7 +368,13 @@ QuickPane/
         ├── ShellRootSection.cs       # Network and Linux roots
         ├── FolderItem.xaml(.cs)      # One folder row
         ├── FolderTreeNode.cs         # A lazy tree node
-        ├── SettingsPanel.xaml(.cs)   # Settings
+        ├── SettingsPanel.xaml(.cs)   # Settings window frame
+        ├── SettingsPanel.Blocks.cs   # Settings blocks: hotkeys, backup, mode, dock
+        ├── SettingsPanel.Profiles.cs # Profile columns
+        ├── SettingsPanel.Reorder.cs  # Drag reordering in Settings
+        ├── SettingsPanel.Ssh.cs      # SSH connections
+        ├── FolderPicker.cs           # Explorer-style folder picker
+        ├── PickerPlaces.cs           # Pins in QuickPane's own pickers
         ├── GroupPickerWindow.xaml(.cs) # Pick a group when pinning
         ├── TextPrompt.cs             # Top-level prompts for text entry
         ├── DropLineAdorner.cs        # Reorder drop line
@@ -369,7 +386,7 @@ QuickPane/
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/your-feature`)
 3. Make your changes (keep to documented Win32 and the existing C# 7.3 / .NET Framework 4.8 target)
-4. Build and test on Windows 10 or 11
+4. Build and run the unit tests with `scripts/test.ps1` on Windows 10 or 11
 5. Commit your changes (`git commit -m 'Add your feature'`)
 6. Push to the branch (`git push origin feature/your-feature`)
 7. Open a Pull Request
@@ -383,6 +400,8 @@ PlexPixel ([plexpixel.com](https://plexpixel.com))
 Copyright (C) 2026 PlexPixel
 
 QuickPane is licensed under the GNU General Public License version 3 (GPL-3.0-only). The full text is in [LICENSE](LICENSE). Sections 15 and 16 of the license disclaim any warranty and limit liability.
+
+Parts of QuickPane are ported from jprisant's fork of QuickPane, under the MIT License. The ported parts and that license's text are in [NOTICE.md](NOTICE.md).
 
 ---
 

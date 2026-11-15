@@ -1,3 +1,9 @@
+// ExplorerWatcher.cs
+// Purpose: finds Explorer folder windows, attaches an embedded pane to each (inside mode), and reapplies the layout on window events.
+// Reason: out-of-process WinEvent hooks run no code inside explorer.exe.
+// Defines: ExplorerWatcher.
+// Origin: the Windows 11 tab events are ported from jprisant's fork, commit 8842577 (MIT, see NOTICE.md).
+// Doc: docs/notes/QuickPane/Explorer/ExplorerWatcher.cs.md
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -133,6 +139,18 @@ namespace QuickPane.Explorer
             }
 
             // CREATE or SHOW
+            // A new Windows 11 tab in a window already held. Explorer creates and activates a new tab at
+            // full width. The layout is applied now and reapplied in a short burst while Explorer finishes
+            // creating the tab.
+            ExplorerWindow owner;
+            IntPtr parent = NM.GetParent(hwnd);
+            if (parent != IntPtr.Zero && _windows.TryGetValue(parent, out owner) && owner.IsContentHost(hwnd))
+            {
+                owner.ApplyLayout();
+                Burst();
+                return;
+            }
+
             if (!IsExplorerFolder(hwnd)) return;
             if (_windows.ContainsKey(hwnd)) return;
             QueueAttach(hwnd);
@@ -149,13 +167,23 @@ namespace QuickPane.Explorer
                 return;
             }
 
-            // Explorer resets its content host to full width when the window activates or resizes,
-            // which is the source of the flash on focus. Catch that move on the content host itself and
-            // correct it immediately, before the next sweep, so the shift looks instant.
-            foreach (var w in _windows.Values)
-            {
-                if (w.ContentHost == hwnd) { w.ApplyLayout(); break; }
-            }
+            // Explorer puts a content host back at full width when the window activates or resizes, and a
+            // new Windows 11 tab starts at full width. The move is caught on the host itself and corrected
+            // before the next sweep. Location events fire system-wide. The parent lookup is the first check,
+            // and the class check runs only for children of a window held here.
+            if (_windows.Count == 0) return;
+            ExplorerWindow owner;
+            IntPtr parent = NM.GetParent(hwnd);
+            if (parent != IntPtr.Zero && _windows.TryGetValue(parent, out owner) && owner.IsContentHost(hwnd))
+                owner.ApplyLayout();
+        }
+
+        /// <summary>Move keyboard focus into the pane of the Explorer window in front, for the keyboard
+        /// navigation shortcut. False when that window has no pane here.</summary>
+        public bool FocusPaneFor(IntPtr window)
+        {
+            ExplorerWindow win;
+            return window != IntPtr.Zero && _windows.TryGetValue(window, out win) && win.FocusPane();
         }
 
         private void OnForegroundEvent(uint eventType, IntPtr hwnd, int idObject, int idChild, uint thread)

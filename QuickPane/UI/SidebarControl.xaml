@@ -50,7 +50,7 @@
                         Background="Transparent" BorderThickness="0" Cursor="Hand"
                         ToolTip="Buy me a coffee" Click="OnSupportClick">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="&#x2764;" FontSize="12" Foreground="{DynamicResource AccentBrush}"
+                        <TextBlock Text="&#x2615;" FontSize="12" Foreground="{DynamicResource AccentBrush}"
                                    VerticalAlignment="Center" Margin="0,0,5,0" />
                         <TextBlock Text="Buy me a coffee" FontSize="11"
                                    Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" />

@@ -10,7 +10,7 @@
 ; first so QuickPane.exe exists at the path in [Files].
 
 #define MyAppName "QuickPane"
-#define MyAppVersion "3.11.0"
+#define MyAppVersion "3.12.0"
 #define MyAppPublisher "PlexPixel"
 #define MyAppExe "QuickPane.exe"
 
@@ -46,6 +46,8 @@ Source: "QuickPane\bin\x64\Release\{#MyAppExe}"; DestDir: "{app}"; Flags: ignore
 Source: "QuickPane\bin\x64\Release\{#MyAppExe}.config"; DestDir: "{app}"; Flags: ignoreversion
 ; The GPLv3 text ships with the program.
 Source: "LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+; The MIT notice for the code ported from jprisant's fork is installed with the program.
+Source: "NOTICE.md"; DestDir: "{app}"; DestName: "NOTICE.txt"; Flags: ignoreversion
 
 [Icons]
 ; QuickPane spends its life in the tray, so without a launcher here the only way back in after the app

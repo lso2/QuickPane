@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- QuickPane.csproj
+     Purpose: the MSBuild project for QuickPane.exe (WPF, .NET Framework 4.8, x64).
+     Reason: a legacy csproj with an explicit Compile list, built by MSBuild (scripts/build.ps1).
+     Defines: the QuickPane assembly.
+     Doc: docs/notes/QuickPane/QuickPane.csproj.md -->
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
@@ -104,6 +109,9 @@
     <Compile Include="UI\FolderTreeNode.cs" />
     <Compile Include="UI\ShellRootSection.cs" />
     <Compile Include="UI\SearchSection.cs" />
+    <Compile Include="UI\FolderPicker.cs" />
+    <Compile Include="UI\PickerPlaces.cs" />
+    <Compile Include="UI\UiHelpers.cs" />
     <Compile Include="UI\RecentAppsSection.cs" />
     <Compile Include="UI\AppDefaultsSection.cs" />
     <Compile Include="UI\SshSection.cs" />
@@ -141,6 +149,9 @@
     <Compile Include="UI\SidebarControl.xaml.cs">
       <DependentUpon>SidebarControl.xaml</DependentUpon>
     </Compile>
+    <Compile Include="UI\SidebarControl.Keyboard.cs">
+      <DependentUpon>SidebarControl.xaml</DependentUpon>
+    </Compile>
     <Page Include="UI\GroupSection.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
@@ -174,6 +185,18 @@
       <SubType>Designer</SubType>
     </Page>
     <Compile Include="UI\SettingsPanel.xaml.cs">
+      <DependentUpon>SettingsPanel.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="UI\SettingsPanel.Blocks.cs">
+      <DependentUpon>SettingsPanel.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="UI\SettingsPanel.Profiles.cs">
+      <DependentUpon>SettingsPanel.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="UI\SettingsPanel.Reorder.cs">
+      <DependentUpon>SettingsPanel.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="UI\SettingsPanel.Ssh.cs">
       <DependentUpon>SettingsPanel.xaml</DependentUpon>
     </Compile>
     <Page Include="UI\GroupPickerWindow.xaml">
