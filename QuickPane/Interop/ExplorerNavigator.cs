@@ -12,11 +12,11 @@ namespace QuickPane.Interop
 {
     /// <summary>
     /// Drives a specific Explorer window from outside its process. It uses the Shell.Application
-    /// automation object to find the ShellBrowserWindow whose top-level HWND matches the window the
-    /// pane is embedded in, then navigates it in place, which is equivalent to the user clicking a
-    /// folder in the native nav pane.
+    /// automation object to navigate the target Explorer window in place. On Windows 11, Shell
+    /// windows for different tabs can share a top-level HWND, so navigation also matches the active
+    /// tab's child HWND when the window has multiple tabs.
     ///
-    /// Every call here is late bound through Type.InvokeMember rather than the C# dynamic keyword.
+    /// Automation calls are late bound through Type.InvokeMember rather than the C# dynamic keyword.
     /// The dynamic path routes COM calls through the DLR, which caches a wrapper against each runtime
     /// callable wrapper using Marshal.SetComObjectData, and that cache is invalidated by the explicit
     /// Marshal.ReleaseComObject calls this class needs to make. The two together threw
@@ -26,6 +26,24 @@ namespace QuickPane.Interop
     /// </summary>
     internal static class ExplorerNavigator
     {
+        private const string TabWindowClass = "ShellTabWindowClass";
+        private static readonly Guid TopLevelBrowserService = new Guid("4C96BE40-915C-11CF-99D3-00AA004AE837");
+
+        [ComImport, Guid("6D5140C1-7436-11CE-8034-00AA006009FA"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IShellServiceProvider
+        {
+            [PreserveSig]
+            int QueryService(ref Guid service, ref Guid iid, out IShellBrowser browser);
+        }
+
+        [ComImport, Guid("000214E2-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IShellBrowser
+        {
+            // GetWindow is the first method inherited from IOleWindow.
+            [PreserveSig]
+            int GetWindow(out IntPtr hwnd);
+        }
+
         /// <summary>Navigate on the background worker. Enumerating shell windows is cross-process COM
         /// that blocks for as long as Explorer is busy, and the UI thread shares Explorer's input queue
         /// in Inside mode, so this must never run there.</summary>
@@ -40,12 +58,14 @@ namespace QuickPane.Interop
 
         /// <summary>Drive Navigate2, retrying once when the shell reports the window busy. Giving up on
         /// a busy window left the click doing nothing at all.</summary>
-        private static bool Navigate2WithRetry(object w, string path)
+        private static bool Navigate2WithRetry(object w, string path, IntPtr topLevelHwnd, IntPtr activeTab)
         {
             for (int attempt = 0; ; attempt++)
             {
                 try
                 {
+                    // Explorer can switch or close the tab while COM is busy or being queried.
+                    if (activeTab != IntPtr.Zero && FirstTabOf(topLevelHwnd) != activeTab) return false;
                     Call(w, "Navigate2", path);
                     return true;
                 }
@@ -83,6 +103,12 @@ namespace QuickPane.Interop
                 windows = Call(shell, "Windows");
                 if (windows == null) return false;
 
+                var firstTab = FirstTabOf(topLevelHwnd);
+                // Explorer places the active tab first in child Z order. With a single tab or a
+                // legacy window, the original top-level HWND match is sufficient.
+                var activeTab = firstTab != IntPtr.Zero &&
+                    NativeMethods.FindWindowEx(topLevelHwnd, firstTab, TabWindowClass, null) != IntPtr.Zero
+                    ? firstTab : IntPtr.Zero;
                 long target = topLevelHwnd.ToInt64();
                 int count = ToInt(Get(windows, "Count"));
                 for (int i = 0; i < count; i++)
@@ -93,8 +119,9 @@ namespace QuickPane.Interop
                         w = Call(windows, "Item", i);
                         if (w == null) continue;
                         if (HwndOf(w) != target) continue;
+                        if (activeTab != IntPtr.Zero && BrowserWindowOf(w) != activeTab) continue;
 
-                        if (Navigate2WithRetry(w, path)) return true;
+                        return Navigate2WithRetry(w, path, topLevelHwnd, activeTab);
                     }
                     catch (Exception ex)
                     {
@@ -103,7 +130,7 @@ namespace QuickPane.Interop
                     finally { Release(w); }
                 }
 
-                Log.Event("navigate", "no Explorer window matched hwnd " + topLevelHwnd.ToString("X") +
+                Log.Event("navigate", "no navigation target matched Explorer hwnd " + topLevelHwnd.ToString("X") +
                     ", so '" + path + "' was not opened in place.");
                 return false;
             }
@@ -117,6 +144,30 @@ namespace QuickPane.Interop
                 Release(windows);
                 Release(shell);
             }
+        }
+
+        private static IntPtr FirstTabOf(IntPtr topLevelHwnd)
+        {
+            return NativeMethods.FindWindowEx(topLevelHwnd, IntPtr.Zero, TabWindowClass, null);
+        }
+
+        private static IntPtr BrowserWindowOf(object shellWindow)
+        {
+            var services = shellWindow as IShellServiceProvider;
+            if (services == null) return IntPtr.Zero;
+
+            var service = TopLevelBrowserService;
+            var iid = typeof(IShellBrowser).GUID;
+            IShellBrowser browser = null;
+            try
+            {
+                if (services.QueryService(ref service, ref iid, out browser) != 0 || browser == null)
+                    return IntPtr.Zero;
+
+                IntPtr hwnd;
+                return browser.GetWindow(out hwnd) == 0 ? hwnd : IntPtr.Zero;
+            }
+            finally { Release(browser); }
         }
 
         /// <summary>The folder currently shown in the Explorer window with this top-level HWND, or null.</summary>
